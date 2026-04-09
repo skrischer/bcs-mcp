@@ -9,6 +9,7 @@ MCP server for Projektron BCS time tracking. Gives Claude Desktop direct access 
 - pnpm
 - tsup (bundler)
 - @modelcontextprotocol/sdk
+- node-html-parser (HTML form parsing)
 - vitest (tests)
 
 ## Commands
@@ -24,35 +25,45 @@ pnpm start        # Start MCP server (stdio)
 
 ```
 src/auth.ts   — BCS authentication (login, CSRF, session persistence)
-src/api.ts    — BCS REST API calls (bookings, tasks, effort)
+src/api.ts    — BCS form-based API (HTML GET/POST, form state parsing)
 src/tools.ts  — MCP tool definitions (4 tools)
 src/index.ts  — Server entry point (stdio transport)
 ```
 
 Flow: `index.ts` -> `tools.ts` -> `api.ts` -> `auth.ts` -> BCS
 
-## BCS API Endpoints
+## BCS Integration
 
-All endpoints require `Cookie: JSESSIONID=...` and `X-CSRF-Token: ...` headers.
+BCS uses **form-based server-side rendering**, not a REST API. The integration works by:
 
-### Auth
-- `POST /bcs/login` — Form login (username, password, loginButton). Returns 302 with JSESSIONID cookie.
-- `GET /bcs/mybcs/dayeffortrecording/display?oid=USER_OID` — Page with CSRF token in `<meta name="PageKey" content="...">`.
+1. **Login**: `POST /bcs/login` with fields `user`, `pwd`, `isPassword=pwd`, `login=Anmelden`. Requires pre-fetching the login page for initial JSESSIONID + pagetimestamp. Returns `JSESSIONID` + `CSRF_Token` cookies.
+2. **Read day data**: `GET /bcs/mybcs/dayeffortrecording/display` with date query params + `oid`. Returns ~600KB HTML with all form fields.
+3. **Parse form state**: Extract all `input[name]`, `textarea[name]`, `select[name]` from HTML (~400+ fields).
+4. **Book effort**: Modify effort fields in form state, POST back as `application/x-www-form-urlencoded`.
 
-### REST API
-- `POST /rest/frontend/timerecording/daybooking/bookings` — Get bookings (body: `{date, oid}`) or create booking (body: `{date, oid, taskOid, effortExpense_hour, effortExpense_minute, description}`).
-- `GET /rest/frontend/timerecording/daybooking/bookingTasks?oid=OID&date=DATE` — Get bookable tasks.
+### Form field structure
 
-Response envelope: `{ ok: boolean, type: string, result: T, messages: [], issues: unknown }`
+- Events (booked efforts): `daytimerecording,Content,daytimerecordingEvents,Columns,{column},listeditoid_{OID}.{field}`
+- PSP Tree (projects): `daytimerecording,Content,daytimerecordingPspTree,Columns,{column},listeditoid_{OID}.{field}`
+- Date params: `year`, `month` (1-based), `day` as separate query params
+- Auth: `Cookie: JSESSIONID=...; CSRF_Token=...` + `X-CSRF-Token: ...` header
+
+### Key fields per effort entry
+
+- `effortExpense_hour` / `effortExpense_minute` — booked time
+- `description` — work description
+- `effortTargetOid` — task OID
+- `effortEventRefOid.name` — event/appointment name
+- `recordType` — "effort", "project", or "root"
 
 ## MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `bcs_get_bookings` | Get bookings for a date |
-| `bcs_get_booking_tasks` | Get available tasks to book to |
-| `bcs_book_effort` | Book time to a task |
-| `bcs_get_day_summary` | Get day overview with totals |
+| `bcs_get_bookings` | Get booked efforts for a date |
+| `bcs_get_booking_tasks` | Get available projects/tasks to book to |
+| `bcs_book_effort` | Book time to a project via form POST |
+| `bcs_get_day_summary` | Get day overview with totals + available tasks |
 
 ## Claude Desktop Integration
 
@@ -77,7 +88,9 @@ Add to `claude_desktop_config.json`:
 
 ## Known Issues
 
-- BCS REST API field names are based on reverse engineering and may differ. First successful responses are logged to stderr for verification.
+- Project/task names are not available in the HTML (rendered clientside). Only OIDs are returned.
+- Task-level OIDs (below projects) are only visible when the project tree node is expanded.
+- Booking via form POST sends the entire form state (~400 fields). The `bookEffort` function replaces only the target effort fields.
 - Session persistence uses a local `.bcs-session` file (30 min TTL).
 
 ## Coding Conventions

@@ -6,21 +6,23 @@ import {
   bookEffort,
   getDaySummary,
 } from "./api.js";
-import type { BookingEntry, BookingTask, DaySummary } from "./api.js";
+import type { BookingEntry, TaskEntry, DaySummary } from "./api.js";
 
 function formatBookings(entries: BookingEntry[]): string {
   if (entries.length === 0) return "No bookings found for this date.";
   return entries
     .map(
       (e, i) =>
-        `${i + 1}. ${e.taskName} — ${e.effortExpense_hour}h ${e.effortExpense_minute}m: ${e.description}`,
+        `${i + 1}. ${e.eventName || e.oid} — ${e.hours}h ${e.minutes}m: ${e.description || "(no description)"}${e.taskOid ? ` (task: ${e.taskOid})` : ""}`,
     )
     .join("\n");
 }
 
-function formatTasks(tasks: BookingTask[]): string {
+function formatTasks(tasks: TaskEntry[]): string {
   if (tasks.length === 0) return "No bookable tasks found.";
-  return tasks.map((t) => `- ${t.name} (OID: ${t.oid})`).join("\n");
+  return tasks
+    .map((t) => `- ${t.name} (OID: ${t.oid}, type: ${t.recordType})`)
+    .join("\n");
 }
 
 function formatDaySummary(summary: DaySummary): string {
@@ -30,6 +32,9 @@ function formatDaySummary(summary: DaySummary): string {
     "",
     "Entries:",
     formatBookings(summary.entries),
+    "",
+    "Available tasks:",
+    formatTasks(summary.tasks),
   ];
   return lines.join("\n");
 }
@@ -47,12 +52,12 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     "bcs_get_booking_tasks",
-    "Get available tasks that can be booked to. Returns task names and OIDs needed for booking. Optionally filter by date.",
+    "Get available tasks/projects that can be booked to. Returns task names and OIDs needed for booking. Optionally filter by date.",
     {
       date: z
         .string()
         .optional()
-        .describe("Optional date in YYYY-MM-DD format to filter tasks"),
+        .describe("Optional date in YYYY-MM-DD format"),
     },
     async ({ date }) => {
       const tasks = await getBookingTasks(date);
@@ -67,7 +72,9 @@ export function registerTools(server: McpServer): void {
       date: z.string().describe("Date in YYYY-MM-DD format"),
       taskOid: z
         .string()
-        .describe("OID of the task to book to (from bcs_get_booking_tasks)"),
+        .describe(
+          "OID of the task/project to book to (from bcs_get_booking_tasks)",
+        ),
       hours: z.number().int().min(0).describe("Hours to book"),
       minutes: z
         .number()
@@ -86,11 +93,14 @@ export function registerTools(server: McpServer): void {
         minutes,
         description,
       });
+      const status = result.success
+        ? "Booking confirmed"
+        : "Booking submitted (verify manually)";
       return {
         content: [
           {
             type: "text",
-            text: `Booked ${hours}h ${minutes}m to task ${taskOid} on ${date}: ${description}\n\nResponse: ${JSON.stringify(result)}`,
+            text: `${status}: ${hours}h ${minutes}m on ${date}\n\nCurrent bookings:\n${formatBookings(result.entries)}`,
           },
         ],
       };
@@ -99,7 +109,7 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     "bcs_get_day_summary",
-    "Get a summary of the day including total booked time, remaining time, and all entries. Use this to check how much time is left to book.",
+    "Get a summary of the day including total booked time, remaining time, all entries, and available tasks. Use this to check how much time is left to book.",
     { date: z.string().describe("Date in YYYY-MM-DD format") },
     async ({ date }) => {
       const summary = await getDaySummary(date);

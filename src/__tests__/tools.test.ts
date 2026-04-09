@@ -13,14 +13,13 @@ import {
   bookEffort,
   getDaySummary,
 } from "../api.js";
-import type { BookingEntry, BookingTask, DaySummary } from "../api.js";
+import type { BookingEntry, TaskEntry, DaySummary } from "../api.js";
 
 const mockGetBookings = vi.mocked(getBookings);
 const mockGetBookingTasks = vi.mocked(getBookingTasks);
 const mockBookEffort = vi.mocked(bookEffort);
 const mockGetDaySummary = vi.mocked(getDaySummary);
 
-// We test the tool handlers by importing registerTools and calling with a mock server
 import { registerTools } from "../tools.js";
 
 interface ToolRegistration {
@@ -88,9 +87,9 @@ describe("tools", () => {
         {
           oid: "B1",
           taskOid: "T1",
-          taskName: "Project A",
-          effortExpense_hour: 2,
-          effortExpense_minute: 0,
+          eventName: "Meeting",
+          hours: 2,
+          minutes: 0,
           description: "Coding",
         },
       ];
@@ -99,8 +98,8 @@ describe("tools", () => {
       const handler = getToolHandler(mockServer.tools, "bcs_get_bookings");
       const result = await handler({ date: "2024-01-15" });
 
-      expect(result.content[0]?.text).toContain("Project A");
       expect(result.content[0]?.text).toContain("2h 0m");
+      expect(result.content[0]?.text).toContain("Coding");
     });
 
     it("handles empty bookings", async () => {
@@ -115,9 +114,9 @@ describe("tools", () => {
 
   describe("bcs_get_booking_tasks", () => {
     it("returns formatted task list", async () => {
-      const tasks: BookingTask[] = [
-        { oid: "T1", name: "Task One" },
-        { oid: "T2", name: "Task Two" },
+      const tasks: TaskEntry[] = [
+        { oid: "T1", name: "Task One", recordType: "project" },
+        { oid: "T2", name: "Task Two", recordType: "project" },
       ];
       mockGetBookingTasks.mockResolvedValue(tasks);
 
@@ -131,7 +130,19 @@ describe("tools", () => {
 
   describe("bcs_book_effort", () => {
     it("books effort and returns confirmation", async () => {
-      mockBookEffort.mockResolvedValue({ booked: true });
+      mockBookEffort.mockResolvedValue({
+        success: true,
+        entries: [
+          {
+            oid: "B1",
+            taskOid: "T1",
+            eventName: "Meeting",
+            hours: 3,
+            minutes: 0,
+            description: "Development",
+          },
+        ],
+      });
 
       const handler = getToolHandler(mockServer.tools, "bcs_book_effort");
       const result = await handler({
@@ -142,14 +153,8 @@ describe("tools", () => {
         description: "Development",
       });
 
-      expect(result.content[0]?.text).toContain("Booked 3h 0m");
-      expect(mockBookEffort).toHaveBeenCalledWith({
-        date: "2024-01-15",
-        taskOid: "T1",
-        hours: 3,
-        minutes: 0,
-        description: "Development",
-      });
+      expect(result.content[0]?.text).toContain("Booking confirmed");
+      expect(result.content[0]?.text).toContain("3h 0m");
     });
   });
 
@@ -159,6 +164,7 @@ describe("tools", () => {
         totalHours: 6,
         totalMinutes: 30,
         entries: [],
+        tasks: [],
         unbooked: { hours: 1, minutes: 30 },
       };
       mockGetDaySummary.mockResolvedValue(summary);

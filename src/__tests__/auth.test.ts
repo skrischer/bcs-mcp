@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { login, fetchCsrfToken, getConfig } from "../auth.js";
+import { login, getConfig } from "../auth.js";
 import type { BcsConfig } from "../auth.js";
+
+type FetchFn = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
 
 const mockConfig: BcsConfig = {
   BCS_URL: "https://bcs.example.com",
@@ -8,6 +13,27 @@ const mockConfig: BcsConfig = {
   BCS_PASSWORD: "testpass",
   BCS_USER_OID: "OID123",
 };
+
+function makeLoginPageResponse(): Response {
+  const html = '<input name="pagetimestamp" type="hidden" value="123456">';
+  return new Response(html, {
+    status: 200,
+    headers: {
+      "set-cookie": "JSESSIONID=initial123; Path=/; HttpOnly",
+    },
+  });
+}
+
+function makeLoginSuccessResponse(): Response {
+  return new Response(null, {
+    status: 302,
+    headers: [
+      ["set-cookie", "JSESSIONID=abc123; Path=/; HttpOnly; SameSite=Lax"],
+      ["set-cookie", "CSRF_Token=csrftoken456; Path=/; SameSite=Lax"],
+      ["location", "/bcs"],
+    ],
+  });
+}
 
 describe("auth", () => {
   beforeEach(() => {
@@ -45,94 +71,67 @@ describe("auth", () => {
   });
 
   describe("login", () => {
-    it("extracts JSESSIONID from Set-Cookie header", async () => {
+    it("extracts JSESSIONID and CSRF_Token from login response", async () => {
       const mockFetch = vi
-        .fn<
-          (
-            input: string | URL | Request,
-            init?: RequestInit,
-          ) => Promise<Response>
-        >()
-        .mockResolvedValue(
+        .fn<FetchFn>()
+        .mockResolvedValueOnce(makeLoginPageResponse())
+        .mockResolvedValueOnce(makeLoginSuccessResponse());
+      vi.stubGlobal("fetch", mockFetch);
+
+      const result = await login(mockConfig);
+      expect(result.sessionId).toBe("abc123");
+      expect(result.csrfToken).toBe("csrftoken456");
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("throws when no initial JSESSIONID from login page", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn<FetchFn>()
+          .mockResolvedValue(new Response("", { status: 200, headers: {} })),
+      );
+
+      await expect(login(mockConfig)).rejects.toThrow("no initial JSESSIONID");
+    });
+
+    it("throws when no CSRF_Token cookie in login response", async () => {
+      const mockFetch = vi
+        .fn<FetchFn>()
+        .mockResolvedValueOnce(makeLoginPageResponse())
+        .mockResolvedValueOnce(
           new Response(null, {
             status: 302,
-            headers: { "set-cookie": "JSESSIONID=abc123; Path=/; HttpOnly" },
+            headers: {
+              "set-cookie": "JSESSIONID=abc123; Path=/",
+              location: "/bcs",
+            },
           }),
         );
       vi.stubGlobal("fetch", mockFetch);
 
-      const sessionId = await login(mockConfig);
-      expect(sessionId).toBe("abc123");
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        `${mockConfig.BCS_URL}/bcs/login`,
-        expect.objectContaining({
-          method: "POST",
-          redirect: "manual",
-        }),
-      );
+      await expect(login(mockConfig)).rejects.toThrow("no CSRF_Token cookie");
     });
 
-    it("throws when no JSESSIONID in response", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi
-          .fn<
-            (
-              input: string | URL | Request,
-              init?: RequestInit,
-            ) => Promise<Response>
-          >()
-          .mockResolvedValue(new Response(null, { status: 302, headers: {} })),
-      );
+    it("throws when redirected back to login page", async () => {
+      const mockFetch = vi
+        .fn<FetchFn>()
+        .mockResolvedValueOnce(makeLoginPageResponse())
+        .mockResolvedValueOnce(
+          new Response(null, {
+            status: 302,
+            headers: [
+              ["set-cookie", "JSESSIONID=abc123; Path=/"],
+              ["set-cookie", "CSRF_Token=tok; Path=/"],
+              ["location", "/bcs/login"],
+            ],
+          }),
+        );
+      vi.stubGlobal("fetch", mockFetch);
 
-      await expect(login(mockConfig)).rejects.toThrow("no JSESSIONID");
-    });
-  });
-
-  describe("fetchCsrfToken", () => {
-    it("extracts CSRF token from page HTML", async () => {
-      const html = `
-        <html>
-        <head>
-          <meta name="PageKey" content="csrf-token-xyz">
-        </head>
-        <body></body>
-        </html>
-      `;
-      vi.stubGlobal(
-        "fetch",
-        vi
-          .fn<
-            (
-              input: string | URL | Request,
-              init?: RequestInit,
-            ) => Promise<Response>
-          >()
-          .mockResolvedValue(new Response(html, { status: 200 })),
-      );
-
-      const token = await fetchCsrfToken(mockConfig, "session123");
-      expect(token).toBe("csrf-token-xyz");
-    });
-
-    it("throws when no PageKey meta tag found", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi
-          .fn<
-            (
-              input: string | URL | Request,
-              init?: RequestInit,
-            ) => Promise<Response>
-          >()
-          .mockResolvedValue(
-            new Response("<html><body></body></html>", { status: 200 }),
-          ),
-      );
-
-      await expect(fetchCsrfToken(mockConfig, "session123")).rejects.toThrow(
-        "CSRF token not found",
+      await expect(login(mockConfig)).rejects.toThrow(
+        "redirected back to login",
       );
     });
   });

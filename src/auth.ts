@@ -66,48 +66,72 @@ async function invalidateSession(): Promise<void> {
   }
 }
 
-export async function login(config: BcsConfig): Promise<string> {
+interface LoginResult {
+  sessionId: string;
+  csrfToken: string;
+}
+
+export async function login(config: BcsConfig): Promise<LoginResult> {
+  // Step 1: GET login page for initial JSESSIONID + pagetimestamp
+  const preRes = await fetch(`${config.BCS_URL}/bcs/login`, {
+    redirect: "manual",
+  });
+  const preCookies = preRes.headers.getSetCookie();
+  const preSessionMatch = preCookies.join(";").match(/JSESSIONID=([^;]+)/);
+  const initialSessionId = preSessionMatch?.[1];
+  if (!initialSessionId) {
+    throw new Error("Login failed: no initial JSESSIONID from login page");
+  }
+
+  const preHtml = await preRes.text();
+  const timestampMatch = /name="pagetimestamp"[^>]*value="([^"]+)"/.exec(
+    preHtml,
+  );
+  const pagetimestamp = timestampMatch?.[1] ?? "";
+
+  // Step 2: POST login with correct field names
   const body = new URLSearchParams({
-    username: config.BCS_USERNAME,
-    password: config.BCS_PASSWORD,
-    loginButton: "Anmelden",
+    user: config.BCS_USERNAME,
+    pwd: config.BCS_PASSWORD,
+    isPassword: "pwd",
+    login: "Anmelden",
+    ...(pagetimestamp ? { pagetimestamp } : {}),
   });
 
   const response = await fetch(`${config.BCS_URL}/bcs/login`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Cookie: `JSESSIONID=${initialSessionId}`,
+    },
     body: body.toString(),
     redirect: "manual",
   });
 
-  const setCookie = response.headers.get("set-cookie") ?? "";
-  const match = /JSESSIONID=([^;]+)/.exec(setCookie);
-  if (!match?.[1]) {
+  const setCookies = response.headers.getSetCookie();
+  const cookieStr = setCookies.join(";");
+
+  // Extract JSESSIONID (new or keep initial)
+  const newSessionMatch = cookieStr.match(/JSESSIONID=([^;]+)/);
+  const sessionId = newSessionMatch?.[1] ?? initialSessionId;
+
+  // Extract CSRF_Token cookie (set by BCS on successful login)
+  const csrfMatch = cookieStr.match(/CSRF_Token=([^;]+)/);
+  if (!csrfMatch?.[1]) {
     throw new Error(
-      `Login failed: no JSESSIONID in response (status ${response.status})`,
+      "Login failed: no CSRF_Token cookie (invalid credentials?)",
     );
   }
 
-  return match[1];
-}
-
-export async function fetchCsrfToken(
-  config: BcsConfig,
-  sessionId: string,
-): Promise<string> {
-  const url = `${config.BCS_URL}/bcs/mybcs/dayeffortrecording/display?oid=${config.BCS_USER_OID}`;
-  const response = await fetch(url, {
-    headers: { Cookie: `JSESSIONID=${sessionId}` },
-    redirect: "manual",
-  });
-
-  const html = await response.text();
-  const match = /<meta\s+name="PageKey"\s+content="([^"]+)"/.exec(html);
-  if (!match?.[1]) {
-    throw new Error("CSRF token not found in page HTML");
+  // Verify login succeeded: 302 redirect to non-login page
+  if (response.status === 302) {
+    const location = response.headers.get("location") ?? "";
+    if (location.includes("/login")) {
+      throw new Error("Login failed: redirected back to login page");
+    }
   }
 
-  return match[1];
+  return { sessionId, csrfToken: csrfMatch[1] };
 }
 
 export async function getSession(): Promise<SessionData> {
@@ -125,8 +149,7 @@ export async function getSession(): Promise<SessionData> {
   }
 
   const config = getConfig();
-  const sessionId = await login(config);
-  const csrfToken = await fetchCsrfToken(config, sessionId);
+  const { sessionId, csrfToken } = await login(config);
   const session: SessionData = { sessionId, csrfToken, timestamp: Date.now() };
   cachedSession = session;
   await saveSession(session);
@@ -134,17 +157,9 @@ export async function getSession(): Promise<SessionData> {
 }
 
 export async function refreshCsrfToken(): Promise<SessionData> {
-  const config = getConfig();
-  const current = await getSession();
-  const csrfToken = await fetchCsrfToken(config, current.sessionId);
-  const session: SessionData = {
-    sessionId: current.sessionId,
-    csrfToken,
-    timestamp: Date.now(),
-  };
-  cachedSession = session;
-  await saveSession(session);
-  return session;
+  // CSRF token comes from login cookie — re-login to get a fresh one
+  await invalidateSession();
+  return getSession();
 }
 
 export async function authenticatedFetch(
@@ -155,7 +170,10 @@ export async function authenticatedFetch(
 
   const makeRequest = (s: SessionData): Promise<Response> => {
     const headers = new Headers(options.headers);
-    headers.set("Cookie", `JSESSIONID=${s.sessionId}`);
+    headers.set(
+      "Cookie",
+      `JSESSIONID=${s.sessionId}; CSRF_Token=${s.csrfToken}`,
+    );
     headers.set("X-CSRF-Token", s.csrfToken);
     return fetch(url, { ...options, headers });
   };
