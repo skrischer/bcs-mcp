@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseFormState, parseBookings, parseTasks } from "../api.js";
+import {
+  parseFormState,
+  parseAttendance,
+  parseProjectAggregates,
+  parseExpandedTasks,
+} from "../api.js";
 
 const SAMPLE_HTML = `
 <html><body>
@@ -8,16 +13,24 @@ const SAMPLE_HTML = `
   <input type="hidden" name="daytimerecording,formsubmitted" value="">
   <input type="hidden" name="daytimerecording,Selections,effortRecordingDate,__calendar_state" value="D20260409">
 
-  <!-- Events table: actual effort entries -->
-  <input type="hidden" name="daytimerecording,Content,daytimerecordingEvents,Columns,recordOid,listeditoid_EFFORT1.recordOid" value="EFFORT1">
-  <input type="hidden" name="daytimerecording,Content,daytimerecordingEvents,Columns,recordType,listeditoid_EFFORT1.recordType" value="effort">
-  <input type="hidden" name="daytimerecording,Content,daytimerecordingEvents,Columns,effortTargetOid,listeditoid_EFFORT1.effortTargetOid" value="TASK_OID_1">
-  <input type="hidden" name="daytimerecording,Content,daytimerecordingEvents,Columns,effortEventRefOid.name,listeditoid_EFFORT1.effortEventRefOid.name" value="Entwicklung">
-  <input type="text" name="daytimerecording,Content,daytimerecordingEvents,Columns,effortExpense,listeditoid_EFFORT1.effortExpense_hour" value="4">
-  <input type="text" name="daytimerecording,Content,daytimerecordingEvents,Columns,effortExpense,listeditoid_EFFORT1.effortExpense_minute" value="30">
-  <textarea name="daytimerecording,Content,daytimerecordingEvents,Columns,description,listeditoid_EFFORT1.description">HYBRIS-1234</textarea>
+  <!-- Attendance: existing row -->
+  <input type="hidden" name="daytimerecording,Content,daytimerecordingAttendance,Columns,recordType,listeditoid_ATT1.recordType" value="unsavedAttendance">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart_hour,listeditoid_ATT1.attandenceStart_hour" value="8">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart_minute,listeditoid_ATT1.attandenceStart_minute" value="00">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceEnd_hour,listeditoid_ATT1.attandenceEnd_hour" value="17">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceEnd_minute,listeditoid_ATT1.attandenceEnd_minute" value="00">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceDuration_hour,listeditoid_ATT1.attandenceDuration_hour" value="9">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceDuration_minute,listeditoid_ATT1.attandenceDuration_minute" value="00">
 
-  <!-- PSP Tree: projects for booking -->
+  <!-- Attendance: $new$ row (should be skipped by parseAttendance) -->
+  <input type="hidden" name="daytimerecording,Content,daytimerecordingAttendance,Columns,recordType,listeditoid_$new$1234_JTimeSpan.recordType" value="unsavedAttendance">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart_hour,listeditoid_$new$1234_JTimeSpan.attandenceStart_hour" value="">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart_minute,listeditoid_$new$1234_JTimeSpan.attandenceStart_minute" value="">
+
+  <!-- Attendance: $new$ pause row -->
+  <input type="hidden" name="daytimerecording,Content,daytimerecordingAttendance,Columns,recordType,listeditoid_$new$5678_JTimeSpan.recordType" value="unsavedPause">
+
+  <!-- PSP Tree: projects -->
   <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordOid,listeditoid_USER1.recordOid" value="USER1">
   <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordType,listeditoid_USER1.recordType" value="root">
   <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordOid,listeditoid_PROJ1.recordOid" value="PROJ1">
@@ -34,28 +47,40 @@ const SAMPLE_HTML = `
     <option value="b" selected>B</option>
   </select>
 </form>
-<script>
-  Page.registerProjectExpense('x,listeditoid_PROJ1.effortExpense', 'PROJ1', 270);
-  Page.registerProjectExpense('x,listeditoid_PROJ2.effortExpense', 'PROJ2', 0);
-</script>
 </body></html>
 `;
+
+// Simulates fields returned by expandTreeNode (AJAX response)
+const EXPANDED_TASK_FIELDS: [string, string][] = [
+  [
+    "daytimerecording,Content,daytimerecordingPspTree,Columns,recordType,listeditoid_TASK1.recordType",
+    "effort",
+  ],
+  [
+    "daytimerecording,Content,daytimerecordingPspTree,Columns,recordOid,listeditoid_TASK1.recordOid",
+    "TASK1_RECORD",
+  ],
+  [
+    "daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_TASK1.effortExpense_hour",
+    "2",
+  ],
+  [
+    "daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_TASK1.effortExpense_minute",
+    "15",
+  ],
+  [
+    "daytimerecording,Content,daytimerecordingPspTree,Columns,description,listeditoid_TASK1.description",
+    "JIRA-42",
+  ],
+];
 
 describe("api", () => {
   describe("parseFormState", () => {
     it("extracts all input, textarea, and select fields", () => {
       const state = new Map(parseFormState(SAMPLE_HTML));
-
       expect(state.get("transactionId")).toBe("123-abc");
       expect(state.get("daytimerecording,formsubmitted")).toBe("");
       expect(state.get("someSetting")).toBe("b");
-    });
-
-    it("extracts textarea content", () => {
-      const state = new Map(parseFormState(SAMPLE_HTML));
-      const descKey =
-        "daytimerecording,Content,daytimerecordingEvents,Columns,description,listeditoid_EFFORT1.description";
-      expect(state.get(descKey)).toBe("HYBRIS-1234");
     });
 
     it("returns empty array for empty html", () => {
@@ -76,55 +101,77 @@ describe("api", () => {
     });
   });
 
-  describe("parseBookings", () => {
-    it("extracts bookings from Events table fields", () => {
-      const entries = parseBookings(SAMPLE_HTML);
-
+  describe("parseAttendance", () => {
+    it("extracts existing attendance rows", () => {
+      const entries = parseAttendance(SAMPLE_HTML);
       expect(entries).toHaveLength(1);
-      const entry = entries[0];
-      expect(entry?.oid).toBe("EFFORT1");
-      expect(entry?.taskOid).toBe("TASK_OID_1");
-      expect(entry?.eventName).toBe("Entwicklung");
-      expect(entry?.hours).toBe(4);
-      expect(entry?.minutes).toBe(30);
-      expect(entry?.description).toBe("HYBRIS-1234");
+      const att = entries[0]!;
+      expect(att.oid).toBe("ATT1");
+      expect(att.startHour).toBe(8);
+      expect(att.startMinute).toBe(0);
+      expect(att.endHour).toBe(17);
+      expect(att.endMinute).toBe(0);
+      expect(att.durationHour).toBe(9);
+      expect(att.durationMinute).toBe(0);
+      expect(att.recordType).toBe("unsavedAttendance");
     });
 
-    it("returns empty array for html without events", () => {
-      const entries = parseBookings("<html><body></body></html>");
+    it("skips $new$ rows", () => {
+      const entries = parseAttendance(SAMPLE_HTML);
+      const newRows = entries.filter((e) => e.oid.includes("$new$"));
+      expect(newRows).toHaveLength(0);
+    });
+
+    it("returns empty array for html without attendance", () => {
+      const entries = parseAttendance("<html><body></body></html>");
       expect(entries).toHaveLength(0);
     });
   });
 
-  describe("parseTasks", () => {
-    it("extracts projects from PSP tree form fields", () => {
-      const tasks = parseTasks(SAMPLE_HTML);
+  describe("parseProjectAggregates", () => {
+    it("extracts project aggregates from PSP tree", () => {
+      const projects = parseProjectAggregates(SAMPLE_HTML);
+      expect(projects).toHaveLength(2);
 
-      expect(tasks.length).toBe(2);
-      const proj1 = tasks.find((t) => t.oid === "PROJ1");
+      const proj1 = projects.find((p) => p.projectOid === "PROJ1");
       expect(proj1).toBeDefined();
-      expect(proj1?.recordType).toBe("project");
+      expect(proj1?.hours).toBe(4);
+      expect(proj1?.minutes).toBe(30);
+
+      const proj2 = projects.find((p) => p.projectOid === "PROJ2");
+      expect(proj2?.hours).toBe(0);
+      expect(proj2?.minutes).toBe(0);
     });
 
-    it("skips root nodes", () => {
-      const tasks = parseTasks(SAMPLE_HTML);
-      const root = tasks.find((t) => t.oid === "USER1");
+    it("skips root rows", () => {
+      const projects = parseProjectAggregates(SAMPLE_HTML);
+      const root = projects.find((p) => p.projectOid === "USER1");
       expect(root).toBeUndefined();
     });
 
-    it("falls back to registerProjectExpense when no form tasks", () => {
-      const htmlNoForm = `
-        <html><body>
-        <script>
-          Page.registerProjectExpense('x,listeditoid_P1.effortExpense', 'PROJECT_1', 0);
-          Page.registerProjectExpense('x,listeditoid_P2.effortExpense', 'PROJECT_2', 120);
-        </script>
-        </body></html>
-      `;
-      const tasks = parseTasks(htmlNoForm);
-      expect(tasks.length).toBe(2);
-      expect(tasks.map((t) => t.oid)).toContain("PROJECT_1");
-      expect(tasks.map((t) => t.oid)).toContain("PROJECT_2");
+    it("returns empty array for empty html", () => {
+      const projects = parseProjectAggregates("<html><body></body></html>");
+      expect(projects).toHaveLength(0);
+    });
+  });
+
+  describe("parseExpandedTasks", () => {
+    it("extracts tasks from expanded tree fields", () => {
+      const tasks = parseExpandedTasks(EXPANDED_TASK_FIELDS);
+      expect(tasks).toHaveLength(1);
+
+      const task = tasks[0]!;
+      expect(task.lineOid).toBe("TASK1");
+      expect(task.recordOid).toBe("TASK1_RECORD");
+      expect(task.hours).toBe(2);
+      expect(task.minutes).toBe(15);
+      expect(task.description).toBe("JIRA-42");
+      expect(task.recordType).toBe("effort");
+    });
+
+    it("returns empty array for empty fields", () => {
+      const tasks = parseExpandedTasks([]);
+      expect(tasks).toHaveLength(0);
     });
   });
 });

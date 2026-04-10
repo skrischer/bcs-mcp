@@ -3,29 +3,43 @@ import { authenticatedFetch, getConfig } from "./auth.js";
 
 const PAGE_PATH = "/bcs/mybcs/dayeffortrecording/display";
 const PSP_PREFIX = "daytimerecording,Content,daytimerecordingPspTree,Columns";
-const EVENTS_PREFIX = "daytimerecording,Content,daytimerecordingEvents,Columns";
+// BCS misspells "attendance" as "attandence" in all field names
+const ATTENDANCE_PREFIX =
+  "daytimerecording,Content,daytimerecordingAttendance,Columns";
 
-export interface BookingEntry {
+export interface ProjectAggregate {
+  projectOid: string;
+  hours: number;
+  minutes: number;
+}
+
+export interface AttendanceEntry {
   oid: string;
-  taskOid: string;
-  eventName: string;
+  startHour: number;
+  startMinute: number;
+  endHour: number;
+  endMinute: number;
+  durationHour: number;
+  durationMinute: number;
+  recordType: string;
+}
+
+export interface TaskDetail {
+  lineOid: string;
+  recordOid: string;
   hours: number;
   minutes: number;
   description: string;
-}
-
-export interface TaskEntry {
-  oid: string;
-  name: string;
   recordType: string;
 }
 
 export interface DaySummary {
-  totalHours: number;
-  totalMinutes: number;
-  entries: BookingEntry[];
-  tasks: TaskEntry[];
-  unbooked: { hours: number; minutes: number };
+  attendance: AttendanceEntry[];
+  projects: ProjectAggregate[];
+  bookedHours: number;
+  bookedMinutes: number;
+  unbookedHours: number;
+  unbookedMinutes: number;
 }
 
 function buildDateParams(date: string): Record<string, string> {
@@ -104,40 +118,43 @@ export function parseFormState(html: string): [string, string][] {
   return fields;
 }
 
-function toFormMap(fields: [string, string][]): Map<string, string> {
+export function toFormMap(fields: [string, string][]): Map<string, string> {
   return new Map(fields);
 }
 
-export function parseBookings(html: string): BookingEntry[] {
+export function parseAttendance(html: string): AttendanceEntry[] {
   const formState = toFormMap(parseFormState(html));
-  const entries: BookingEntry[] = [];
+  const entries: AttendanceEntry[] = [];
   const seenOids = new Set<string>();
 
-  // Primary: extract from Events table (actual effort entries)
   for (const [key, value] of formState) {
     if (
-      key.includes(`${EVENTS_PREFIX},effortExpense,listeditoid_`) &&
-      key.endsWith(".effortExpense_hour")
+      key.includes(`${ATTENDANCE_PREFIX},recordType,listeditoid_`) &&
+      key.endsWith(".recordType")
     ) {
-      const oidMatch = /listeditoid_([^.]+)/.exec(key);
-      const oid = oidMatch?.[1];
+      const m = /listeditoid_([^.]+)/.exec(key);
+      const oid = m?.[1];
       if (!oid || seenOids.has(oid)) continue;
+      if (oid.includes("$new$")) continue;
       seenOids.add(oid);
 
-      const hours = parseInt(value, 10) || 0;
-      const minuteKey = key.replace("_hour", "_minute");
-      const minutes = parseInt(formState.get(minuteKey) ?? "0", 10) || 0;
-      const descKey = `${EVENTS_PREFIX},description,listeditoid_${oid}.description`;
-      const taskOidKey = `${EVENTS_PREFIX},effortTargetOid,listeditoid_${oid}.effortTargetOid`;
-      const eventNameKey = `${EVENTS_PREFIX},effortEventRefOid.name,listeditoid_${oid}.effortEventRefOid.name`;
+      const get = (field: string) =>
+        parseInt(
+          formState.get(
+            `${ATTENDANCE_PREFIX},${field},listeditoid_${oid}.${field}`,
+          ) ?? "0",
+          10,
+        ) || 0;
 
       entries.push({
         oid,
-        taskOid: formState.get(taskOidKey) ?? "",
-        eventName: formState.get(eventNameKey) ?? "",
-        hours,
-        minutes,
-        description: formState.get(descKey) ?? "",
+        startHour: get("attandenceStart_hour"),
+        startMinute: get("attandenceStart_minute"),
+        endHour: get("attandenceEnd_hour"),
+        endMinute: get("attandenceEnd_minute"),
+        durationHour: get("attandenceDuration_hour"),
+        durationMinute: get("attandenceDuration_minute"),
+        recordType: value,
       });
     }
   }
@@ -145,48 +162,70 @@ export function parseBookings(html: string): BookingEntry[] {
   return entries;
 }
 
-export function parseTasks(html: string): TaskEntry[] {
+export function parseProjectAggregates(html: string): ProjectAggregate[] {
   const formState = toFormMap(parseFormState(html));
-  const tasks: TaskEntry[] = [];
-  const seenOids = new Set<string>();
+  const projects: ProjectAggregate[] = [];
 
-  // Extract from PSP tree form fields (listeditoid = line OID in the tree)
-  for (const [key] of formState) {
+  for (const [key, value] of formState) {
     if (
       key.includes(`${PSP_PREFIX},recordType,listeditoid_`) &&
-      key.endsWith(".recordType")
+      key.endsWith(".recordType") &&
+      value === "project"
     ) {
-      const oidMatch = /listeditoid_([^.]+)/.exec(key);
-      const oid = oidMatch?.[1];
-      if (!oid || seenOids.has(oid)) continue;
-      seenOids.add(oid);
+      const m = /listeditoid_([^.]+)/.exec(key);
+      const oid = m?.[1];
+      if (!oid) continue;
 
-      const recordType = formState.get(key) ?? "";
-      if (recordType === "root") continue;
-
-      tasks.push({
-        oid,
-        name: oid,
-        recordType,
+      const hourKey = `${PSP_PREFIX},effortExpense,listeditoid_${oid}.effortExpense_hour`;
+      const minKey = `${PSP_PREFIX},effortExpense,listeditoid_${oid}.effortExpense_minute`;
+      projects.push({
+        projectOid: oid,
+        hours: parseInt(formState.get(hourKey) ?? "0", 10) || 0,
+        minutes: parseInt(formState.get(minKey) ?? "0", 10) || 0,
       });
     }
   }
 
-  // Fallback: extract from Page.registerProjectExpense
-  if (tasks.length === 0) {
-    const projectRegex =
-      /Page\.registerProjectExpense\('[^']*listeditoid_([^.]+)\.effortExpense',\s*'([^']+)'/g;
-    let m: RegExpExecArray | null;
-    while ((m = projectRegex.exec(html)) !== null) {
-      const lineOid = m[1];
-      const projectOid = m[2];
-      if (!lineOid || !projectOid || seenOids.has(lineOid)) continue;
-      seenOids.add(lineOid);
+  return projects;
+}
+
+export function parseExpandedTasks(fields: [string, string][]): TaskDetail[] {
+  const m = toFormMap(fields);
+  const tasks: TaskDetail[] = [];
+
+  for (const [key, value] of m) {
+    if (
+      key.includes(`${PSP_PREFIX},recordType,listeditoid_`) &&
+      key.endsWith(".recordType")
+    ) {
+      const match = /listeditoid_([^.]+)/.exec(key);
+      const lineOid = match?.[1];
+      if (!lineOid) continue;
 
       tasks.push({
-        oid: projectOid,
-        name: projectOid,
-        recordType: "project",
+        lineOid,
+        recordOid:
+          m.get(`${PSP_PREFIX},recordOid,listeditoid_${lineOid}.recordOid`) ??
+          "",
+        hours:
+          parseInt(
+            m.get(
+              `${PSP_PREFIX},effortExpense,listeditoid_${lineOid}.effortExpense_hour`,
+            ) ?? "0",
+            10,
+          ) || 0,
+        minutes:
+          parseInt(
+            m.get(
+              `${PSP_PREFIX},effortExpense,listeditoid_${lineOid}.effortExpense_minute`,
+            ) ?? "0",
+            10,
+          ) || 0,
+        description:
+          m.get(
+            `${PSP_PREFIX},description,listeditoid_${lineOid}.description`,
+          ) ?? "",
+        recordType: value,
       });
     }
   }
@@ -196,43 +235,155 @@ export function parseTasks(html: string): TaskEntry[] {
 
 export async function getDaySummary(date: string): Promise<DaySummary> {
   const html = await fetchDayPage(date);
-  const entries = parseBookings(html);
-  const tasks = parseTasks(html);
+  const attendance = parseAttendance(html);
+  const projects = parseProjectAggregates(html);
 
-  let totalMinutes = 0;
-  for (const entry of entries) {
-    totalMinutes += entry.hours * 60 + entry.minutes;
+  let bookedTotal = 0;
+  for (const p of projects) {
+    bookedTotal += p.hours * 60 + p.minutes;
   }
 
-  const totalHours = Math.floor(totalMinutes / 60);
-  const remainingMinutes = totalMinutes % 60;
-  const targetMinutes = 8 * 60;
-  const unbookedTotal = Math.max(0, targetMinutes - totalMinutes);
+  let workingMinutes = 0;
+  for (const a of attendance) {
+    if (a.recordType === "unsavedAttendance") {
+      workingMinutes += a.durationHour * 60 + a.durationMinute;
+    } else if (a.recordType === "unsavedPause") {
+      workingMinutes -= a.durationHour * 60 + a.durationMinute;
+    }
+  }
+
+  const unbookedTotal = Math.max(0, workingMinutes - bookedTotal);
 
   return {
-    totalHours,
-    totalMinutes: remainingMinutes,
-    entries,
-    tasks,
-    unbooked: {
-      hours: Math.floor(unbookedTotal / 60),
-      minutes: unbookedTotal % 60,
-    },
+    attendance,
+    projects,
+    bookedHours: Math.floor(bookedTotal / 60),
+    bookedMinutes: bookedTotal % 60,
+    unbookedHours: Math.floor(unbookedTotal / 60),
+    unbookedMinutes: unbookedTotal % 60,
   };
 }
 
-export async function getBookings(date: string): Promise<BookingEntry[]> {
+export async function getTasksForProject(
+  date: string,
+  projectOid: string,
+): Promise<TaskDetail[]> {
   const html = await fetchDayPage(date);
-  return parseBookings(html);
+  const formMap = toFormMap(parseFormState(html));
+
+  const typeKey = `${PSP_PREFIX},recordType,listeditoid_${projectOid}.recordType`;
+  if (formMap.get(typeKey) !== "project") {
+    throw new Error(
+      `Project OID ${projectOid} not found. Available: ${getAvailableTaskOids(formMap).join(", ")}`,
+    );
+  }
+
+  const taskFields = await expandTreeNode(projectOid);
+  return parseExpandedTasks(taskFields);
 }
 
-export async function getBookingTasks(date?: string): Promise<TaskEntry[]> {
-  const today = date ?? new Date().toISOString().split("T")[0] ?? "";
-  const html = await fetchDayPage(today);
-  return parseTasks(html);
+export async function setAttendance(params: {
+  date: string;
+  startHour: number;
+  startMinute: number;
+  endHour: number;
+  endMinute: number;
+  pauseHour?: number;
+  pauseMinute?: number;
+}): Promise<{ success: boolean }> {
+  const config = getConfig();
+  const html = await fetchDayPage(params.date);
+  const formFields = parseFormState(html);
+  const formMap = toFormMap(formFields);
+
+  // Find $new$ attendance OID
+  let attendanceOid: string | undefined;
+  let pauseOid: string | undefined;
+  for (const [key, value] of formMap) {
+    if (
+      key.includes(`${ATTENDANCE_PREFIX},recordType,listeditoid_`) &&
+      key.endsWith(".recordType") &&
+      key.includes("$new$")
+    ) {
+      const m = /listeditoid_([^.]+)/.exec(key);
+      if (!m?.[1]) continue;
+      if (value === "unsavedAttendance") attendanceOid = m[1];
+      if (value === "unsavedPause") pauseOid = m[1];
+    }
+  }
+
+  if (!attendanceOid) {
+    throw new Error("No $new$ attendance row found on page");
+  }
+
+  // Filter out $new$ attendance rows we don't want to submit
+  const keepOids = new Set<string>([attendanceOid]);
+  if (pauseOid && (params.pauseHour || params.pauseMinute)) {
+    keepOids.add(pauseOid);
+  }
+
+  const filteredFields = formFields.filter(([name]) => {
+    if (!name.includes("daytimerecordingAttendance,$new$")) return true;
+    return [...keepOids].some((oid) => name.includes(oid));
+  });
+
+  const body = new URLSearchParams(filteredFields);
+
+  // Set attendance start/end
+  const setField = (oid: string, field: string, value: string) =>
+    body.set(
+      `${ATTENDANCE_PREFIX},${field},listeditoid_${oid}.${field}`,
+      value,
+    );
+
+  setField(attendanceOid, "attandenceStart_hour", String(params.startHour));
+  setField(
+    attendanceOid,
+    "attandenceStart_minute",
+    String(params.startMinute).padStart(2, "0"),
+  );
+  setField(attendanceOid, "attandenceEnd_hour", String(params.endHour));
+  setField(
+    attendanceOid,
+    "attandenceEnd_minute",
+    String(params.endMinute).padStart(2, "0"),
+  );
+
+  // Set pause if provided
+  if (pauseOid && (params.pauseHour || params.pauseMinute)) {
+    setField(
+      pauseOid,
+      "attandenceDuration_hour",
+      String(params.pauseHour ?? 0),
+    );
+    setField(
+      pauseOid,
+      "attandenceDuration_minute",
+      String(params.pauseMinute ?? 0).padStart(2, "0"),
+    );
+  }
+
+  // Submission flags
+  body.set("daytimerecording,Apply", "Speichern");
+  body.set("PageForm,formChangedIndicator", "true");
+
+  const url = `${config.BCS_URL}${PAGE_PATH}`;
+  const response = await authenticatedFetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Origin: config.BCS_URL,
+      Referer: `${config.BCS_URL}${PAGE_PATH}?oid=${config.BCS_USER_OID}`,
+    },
+    body: body.toString(),
+  });
+
+  return { success: response.ok };
 }
 
-async function expandTreeNode(projectOid: string): Promise<[string, string][]> {
+export async function expandTreeNode(
+  projectOid: string,
+): Promise<[string, string][]> {
   const config = getConfig();
   const url =
     `${config.BCS_URL}${PAGE_PATH}` +
@@ -252,13 +403,88 @@ async function expandTreeNode(projectOid: string): Promise<[string, string][]> {
   return parseFormState(`<form>${html}</form>`);
 }
 
+export async function deleteEffort(params: {
+  date: string;
+  projectOid: string;
+  taskLineOid: string;
+}): Promise<{ success: boolean; projects: ProjectAggregate[] }> {
+  const config = getConfig();
+  const html = await fetchDayPage(params.date);
+  const formFields = parseFormState(html);
+
+  const taskFields = await expandTreeNode(params.projectOid);
+  const taskMap = toFormMap(taskFields);
+
+  const taskLineOid = params.taskLineOid;
+  const taskTypeKey = `${PSP_PREFIX},recordType,listeditoid_${taskLineOid}.recordType`;
+  if (!taskMap.has(taskTypeKey)) {
+    throw new Error(
+      `Task ${taskLineOid} not found in project ${params.projectOid}`,
+    );
+  }
+
+  const filteredFields = formFields.filter(
+    ([name]) => !name.includes("daytimerecordingAttendance,$new$"),
+  );
+  const body = new URLSearchParams([...filteredFields, ...taskFields]);
+
+  // Clear all effort fields with empty strings (BCS interprets as "delete")
+  const clearFields = [
+    "effortExpense_hour",
+    "effortExpense_minute",
+    "effortStart_hour",
+    "effortStart_minute",
+    "effortEnd_hour",
+    "effortEnd_minute",
+  ];
+  for (const field of clearFields) {
+    const col = field.replace(/_(?:hour|minute)$/, "");
+    const key = `${PSP_PREFIX},${col},listeditoid_${taskLineOid}.${field}`;
+    body.set(key, "");
+  }
+  const descKey = `${PSP_PREFIX},description,listeditoid_${taskLineOid}.description`;
+  body.set(descKey, "");
+
+  body.set("daytimerecording,Apply", "Speichern");
+  body.set("PageForm,formChangedIndicator", "true");
+
+  const url = `${config.BCS_URL}${PAGE_PATH}`;
+  const response = await authenticatedFetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Origin: config.BCS_URL,
+      Referer: `${config.BCS_URL}${PAGE_PATH}?oid=${config.BCS_USER_OID}`,
+    },
+    body: body.toString(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to delete effort: ${response.status}`);
+  }
+
+  const responseHtml = await response.text();
+  const responseMap = toFormMap(parseFormState(responseHtml));
+  const afterHour = `${PSP_PREFIX},effortExpense,listeditoid_${params.projectOid}.effortExpense_hour`;
+  const afterMin = `${PSP_PREFIX},effortExpense,listeditoid_${params.projectOid}.effortExpense_minute`;
+  const remaining =
+    (parseInt(responseMap.get(afterHour) ?? "0", 10) || 0) * 60 +
+    (parseInt(responseMap.get(afterMin) ?? "0", 10) || 0);
+
+  return {
+    success: remaining === 0,
+    projects: parseProjectAggregates(responseHtml),
+  };
+}
+
 export async function bookEffort(params: {
   date: string;
-  taskOid: string;
+  projectOid: string;
+  taskLineOid: string;
   hours: number;
   minutes: number;
   description: string;
-}): Promise<{ success: boolean; entries: BookingEntry[] }> {
+}): Promise<{ success: boolean; projects: ProjectAggregate[] }> {
   const config = getConfig();
 
   // Step 1: GET page to obtain form state
@@ -266,22 +492,27 @@ export async function bookEffort(params: {
   const formFields = parseFormState(html);
   const formMap = toFormMap(formFields);
 
-  // Step 2: Find the project that contains the task, then expand it via AJAX
-  const projectOid = findProjectForTask(formMap, params.taskOid);
-  if (!projectOid) {
+  // Verify project exists
+  const typeKey = `${PSP_PREFIX},recordType,listeditoid_${params.projectOid}.recordType`;
+  if (formMap.get(typeKey) !== "project") {
     throw new Error(
-      `Task OID ${params.taskOid} not found on day page. Available: ${getAvailableTaskOids(formMap).join(", ")}`,
+      `Project OID ${params.projectOid} not found. Available: ${getAvailableTaskOids(formMap).join(", ")}`,
     );
   }
 
-  const taskFields = await expandTreeNode(projectOid);
+  // Step 2: AJAX expand project to get task rows
+  const taskFields = await expandTreeNode(params.projectOid);
   const taskMap = toFormMap(taskFields);
 
-  // Step 3: Find the task-level OID in the expanded tree
-  const taskLineOid = findTaskLineOid(taskMap, params.taskOid);
-  if (!taskLineOid) {
+  // Verify task exists in expanded tree
+  const taskLineOid = params.taskLineOid;
+  const taskTypeKey = `${PSP_PREFIX},recordType,listeditoid_${taskLineOid}.recordType`;
+  if (!taskMap.has(taskTypeKey)) {
+    const available = parseExpandedTasks(taskFields)
+      .map((t) => t.lineOid)
+      .join(", ");
     throw new Error(
-      `Task OID ${params.taskOid} not found in expanded tree for project ${projectOid}`,
+      `Task ${taskLineOid} not found in project ${params.projectOid}. Available: ${available}`,
     );
   }
 
@@ -325,16 +556,16 @@ export async function bookEffort(params: {
   // Step 7: Verify by checking PSP tree aggregate in response
   const responseHtml = await response.text();
   const responseMap = toFormMap(parseFormState(responseHtml));
-  const afterHour = `${PSP_PREFIX},effortExpense,listeditoid_${projectOid}.effortExpense_hour`;
-  const afterMin = `${PSP_PREFIX},effortExpense,listeditoid_${projectOid}.effortExpense_minute`;
+  const afterHour = `${PSP_PREFIX},effortExpense,listeditoid_${params.projectOid}.effortExpense_hour`;
+  const afterMin = `${PSP_PREFIX},effortExpense,listeditoid_${params.projectOid}.effortExpense_minute`;
   const projectHours = parseInt(responseMap.get(afterHour) ?? "0", 10);
   const projectMinutes = parseInt(responseMap.get(afterMin) ?? "0", 10);
   const projectTotal = projectHours * 60 + projectMinutes;
   const requestedTotal = params.hours * 60 + params.minutes;
   const success = projectTotal >= requestedTotal;
 
-  const entries = parseBookings(responseHtml);
-  return { success, entries };
+  const projects = parseProjectAggregates(responseHtml);
+  return { success, projects };
 }
 
 function findProjectForTask(

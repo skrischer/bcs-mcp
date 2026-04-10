@@ -43,27 +43,43 @@ BCS uses **form-based server-side rendering**, not a REST API. The integration w
 
 ### Form field structure
 
-- Events (booked efforts): `daytimerecording,Content,daytimerecordingEvents,Columns,{column},listeditoid_{OID}.{field}`
-- PSP Tree (projects): `daytimerecording,Content,daytimerecordingPspTree,Columns,{column},listeditoid_{OID}.{field}`
+- PSP Tree (projects/tasks): `daytimerecording,Content,daytimerecordingPspTree,Columns,{column},listeditoid_{OID}.{field}`
+- Attendance: `daytimerecording,Content,daytimerecordingAttendance,Columns,{column},listeditoid_{OID}.{field}`
+- Events (calendar appointments, read-only): `daytimerecording,Content,daytimerecordingEvents,Columns,{column},listeditoid_{OID}.{field}`
 - Date params: `year`, `month` (1-based), `day` as separate query params
 - Auth: `Cookie: JSESSIONID=...; CSRF_Token=...` + `X-CSRF-Token: ...` header
+
+**Note:** BCS misspells "attendance" as `attandence` in all field names.
+
+### Page structure
+
+- **PSP Tree**: Project rows are readonly aggregates. Task rows appear after AJAX tree expansion (`ajax_request=open`) and are editable.
+- **Attendance**: Has `$new$` rows with `recordType=unsavedAttendance` / `unsavedPause` for creating entries. `$new$` OIDs change per page load.
+- **Events**: Calendar appointments. Not used for manual effort booking.
 
 ### Key fields per effort entry
 
 - `effortExpense_hour` / `effortExpense_minute` — booked time
 - `description` — work description
 - `effortTargetOid` — task OID
-- `effortEventRefOid.name` — event/appointment name
 - `recordType` — "effort", "project", or "root"
+
+### Booking flow
+
+1. GET day page → parse form state (415+ fields)
+2. AJAX expand project tree node → get editable task rows
+3. Merge page fields + task fields, set effort values
+4. POST with `PageForm,formChangedIndicator=true` + `daytimerecording,Apply=Speichern`
+5. Filter `$new$` attendance rows from POST to avoid side effects
 
 ## MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `bcs_get_bookings` | Get booked efforts for a date |
-| `bcs_get_booking_tasks` | Get available projects/tasks to book to |
-| `bcs_book_effort` | Book time to a project via form POST |
-| `bcs_get_day_summary` | Get day overview with totals + available tasks |
+| `bcs_get_day_summary` | Day overview: attendance, projects with aggregate hours, booked/unbooked |
+| `bcs_get_tasks` | List bookable tasks for a project (AJAX tree expansion) |
+| `bcs_book_effort` | Book time to a task via 3-step form POST |
+| `bcs_set_attendance` | Set attendance times (start/end/pause) |
 
 ## Claude Desktop Integration
 
@@ -89,9 +105,10 @@ Add to `claude_desktop_config.json`:
 ## Known Issues
 
 - Project/task names are not available in the HTML (rendered clientside). Only OIDs are returned.
-- Task-level OIDs (below projects) are only visible when the project tree node is expanded.
-- Booking via form POST sends the entire form state (~400 fields). The `bookEffort` function replaces only the target effort fields.
+- Task-level OIDs require AJAX tree expansion per project (`expandTreeNode`).
+- Booking via form POST sends the entire form state (~430 fields). `$new$` attendance rows must be filtered to avoid side effects.
 - Session persistence uses a local `.bcs-session` file (30 min TTL).
+- BCS field names use `attandence` (misspelled) — must match exactly.
 
 ## Coding Conventions
 

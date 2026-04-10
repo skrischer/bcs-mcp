@@ -1,24 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../api.js", () => ({
-  getBookings: vi.fn(),
-  getBookingTasks: vi.fn(),
-  bookEffort: vi.fn(),
   getDaySummary: vi.fn(),
+  getTasksForProject: vi.fn(),
+  bookEffort: vi.fn(),
+  deleteEffort: vi.fn(),
+  setAttendance: vi.fn(),
 }));
 
 import {
-  getBookings,
-  getBookingTasks,
-  bookEffort,
   getDaySummary,
+  getTasksForProject,
+  bookEffort,
+  deleteEffort,
+  setAttendance,
 } from "../api.js";
-import type { BookingEntry, TaskEntry, DaySummary } from "../api.js";
+import type { DaySummary, TaskDetail, ProjectAggregate } from "../api.js";
 
-const mockGetBookings = vi.mocked(getBookings);
-const mockGetBookingTasks = vi.mocked(getBookingTasks);
-const mockBookEffort = vi.mocked(bookEffort);
 const mockGetDaySummary = vi.mocked(getDaySummary);
+const mockGetTasksForProject = vi.mocked(getTasksForProject);
+const mockBookEffort = vi.mocked(bookEffort);
+const mockDeleteEffort = vi.mocked(deleteEffort);
+const mockSetAttendance = vi.mocked(setAttendance);
 
 import { registerTools } from "../tools.js";
 
@@ -72,108 +75,154 @@ describe("tools", () => {
     registerTools(mockServer as unknown as Parameters<typeof registerTools>[0]);
   });
 
-  it("registers all 4 tools", () => {
-    expect(mockServer.tools).toHaveLength(4);
+  it("registers all 5 tools", () => {
+    expect(mockServer.tools).toHaveLength(5);
     const names = mockServer.tools.map((t) => t.name);
-    expect(names).toContain("bcs_get_bookings");
-    expect(names).toContain("bcs_get_booking_tasks");
-    expect(names).toContain("bcs_book_effort");
     expect(names).toContain("bcs_get_day_summary");
+    expect(names).toContain("bcs_get_tasks");
+    expect(names).toContain("bcs_book_effort");
+    expect(names).toContain("bcs_delete_effort");
+    expect(names).toContain("bcs_set_attendance");
   });
 
-  describe("bcs_get_bookings", () => {
-    it("returns formatted booking list", async () => {
-      const entries: BookingEntry[] = [
+  describe("bcs_get_day_summary", () => {
+    it("returns formatted summary with attendance and projects", async () => {
+      const summary: DaySummary = {
+        attendance: [
+          {
+            oid: "ATT1",
+            startHour: 8,
+            startMinute: 0,
+            endHour: 17,
+            endMinute: 0,
+            durationHour: 9,
+            durationMinute: 0,
+            recordType: "unsavedAttendance",
+          },
+        ],
+        projects: [
+          { projectOid: "PROJ1", hours: 4, minutes: 30 },
+          { projectOid: "PROJ2", hours: 2, minutes: 0 },
+        ],
+        bookedHours: 6,
+        bookedMinutes: 30,
+        unbookedHours: 1,
+        unbookedMinutes: 30,
+      };
+      mockGetDaySummary.mockResolvedValue(summary);
+
+      const handler = getToolHandler(mockServer.tools, "bcs_get_day_summary");
+      const result = await handler({ date: "2026-04-10" });
+      const text = result.content[0]?.text ?? "";
+
+      expect(text).toContain("8:00 - 17:00");
+      expect(text).toContain("PROJ1: 4h 30m");
+      expect(text).toContain("Booked: 6h 30m");
+      expect(text).toContain("Unbooked: 1h 30m");
+    });
+  });
+
+  describe("bcs_get_tasks", () => {
+    it("returns formatted task list", async () => {
+      const tasks: TaskDetail[] = [
         {
-          oid: "B1",
-          taskOid: "T1",
-          eventName: "Meeting",
+          lineOid: "TASK1",
+          recordOid: "REC1",
           hours: 2,
           minutes: 0,
-          description: "Coding",
+          description: "JIRA-42",
+          recordType: "effort",
         },
       ];
-      mockGetBookings.mockResolvedValue(entries);
+      mockGetTasksForProject.mockResolvedValue(tasks);
 
-      const handler = getToolHandler(mockServer.tools, "bcs_get_bookings");
-      const result = await handler({ date: "2024-01-15" });
+      const handler = getToolHandler(mockServer.tools, "bcs_get_tasks");
+      const result = await handler({
+        date: "2026-04-10",
+        projectOid: "PROJ1",
+      });
+      const text = result.content[0]?.text ?? "";
 
-      expect(result.content[0]?.text).toContain("2h 0m");
-      expect(result.content[0]?.text).toContain("Coding");
-    });
-
-    it("handles empty bookings", async () => {
-      mockGetBookings.mockResolvedValue([]);
-
-      const handler = getToolHandler(mockServer.tools, "bcs_get_bookings");
-      const result = await handler({ date: "2024-01-15" });
-
-      expect(result.content[0]?.text).toContain("No bookings found");
-    });
-  });
-
-  describe("bcs_get_booking_tasks", () => {
-    it("returns formatted task list", async () => {
-      const tasks: TaskEntry[] = [
-        { oid: "T1", name: "Task One", recordType: "project" },
-        { oid: "T2", name: "Task Two", recordType: "project" },
-      ];
-      mockGetBookingTasks.mockResolvedValue(tasks);
-
-      const handler = getToolHandler(mockServer.tools, "bcs_get_booking_tasks");
-      const result = await handler({});
-
-      expect(result.content[0]?.text).toContain("Task One");
-      expect(result.content[0]?.text).toContain("OID: T1");
+      expect(text).toContain("TASK1");
+      expect(text).toContain("2h 0m");
+      expect(text).toContain("JIRA-42");
     });
   });
 
   describe("bcs_book_effort", () => {
     it("books effort and returns confirmation", async () => {
-      mockBookEffort.mockResolvedValue({
-        success: true,
-        entries: [
-          {
-            oid: "B1",
-            taskOid: "T1",
-            eventName: "Meeting",
-            hours: 3,
-            minutes: 0,
-            description: "Development",
-          },
-        ],
-      });
+      const projects: ProjectAggregate[] = [
+        { projectOid: "PROJ1", hours: 5, minutes: 0 },
+      ];
+      mockBookEffort.mockResolvedValue({ success: true, projects });
 
       const handler = getToolHandler(mockServer.tools, "bcs_book_effort");
       const result = await handler({
-        date: "2024-01-15",
-        taskOid: "T1",
+        date: "2026-04-10",
+        projectOid: "PROJ1",
+        taskLineOid: "TASK1",
         hours: 3,
         minutes: 0,
         description: "Development",
       });
+      const text = result.content[0]?.text ?? "";
 
-      expect(result.content[0]?.text).toContain("Booking confirmed");
-      expect(result.content[0]?.text).toContain("3h 0m");
+      expect(text).toContain("Booking confirmed");
+      expect(text).toContain("3h 0m");
+      expect(text).toContain("PROJ1: 5h 0m");
     });
   });
 
-  describe("bcs_get_day_summary", () => {
-    it("returns formatted summary", async () => {
-      const summary: DaySummary = {
-        totalHours: 6,
-        totalMinutes: 30,
-        entries: [],
-        tasks: [],
-        unbooked: { hours: 1, minutes: 30 },
-      };
-      mockGetDaySummary.mockResolvedValue(summary);
+  describe("bcs_delete_effort", () => {
+    it("deletes effort and returns confirmation", async () => {
+      const projects: ProjectAggregate[] = [
+        { projectOid: "PROJ1", hours: 0, minutes: 0 },
+      ];
+      mockDeleteEffort.mockResolvedValue({ success: true, projects });
 
-      const handler = getToolHandler(mockServer.tools, "bcs_get_day_summary");
-      const result = await handler({ date: "2024-01-15" });
+      const handler = getToolHandler(mockServer.tools, "bcs_delete_effort");
+      const result = await handler({
+        date: "2026-04-10",
+        projectOid: "PROJ1",
+        taskLineOid: "TASK1",
+      });
+      const text = result.content[0]?.text ?? "";
 
-      expect(result.content[0]?.text).toContain("6h 30m");
-      expect(result.content[0]?.text).toContain("1h 30m");
+      expect(text).toContain("Effort deleted");
+      expect(text).toContain("PROJ1: 0h 0m");
+    });
+  });
+
+  describe("bcs_set_attendance", () => {
+    it("sets attendance and returns confirmation", async () => {
+      mockSetAttendance.mockResolvedValue({ success: true });
+
+      const handler = getToolHandler(mockServer.tools, "bcs_set_attendance");
+      const result = await handler({
+        date: "2026-04-10",
+        startHour: 8,
+        startMinute: 0,
+        endHour: 17,
+        endMinute: 0,
+      });
+      const text = result.content[0]?.text ?? "";
+
+      expect(text).toContain("Attendance set: 8:00 - 17:00");
+    });
+
+    it("reports failure", async () => {
+      mockSetAttendance.mockResolvedValue({ success: false });
+
+      const handler = getToolHandler(mockServer.tools, "bcs_set_attendance");
+      const result = await handler({
+        date: "2026-04-10",
+        startHour: 8,
+        startMinute: 0,
+        endHour: 17,
+        endMinute: 0,
+      });
+
+      expect(result.content[0]?.text).toContain("Failed");
     });
   });
 });
