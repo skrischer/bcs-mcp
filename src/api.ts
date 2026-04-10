@@ -9,6 +9,7 @@ const ATTENDANCE_PREFIX =
 
 export interface ProjectAggregate {
   projectOid: string;
+  name: string;
   hours: number;
   minutes: number;
 }
@@ -26,6 +27,7 @@ export interface AttendanceEntry {
 
 export interface TaskDetail {
   lineOid: string;
+  name: string;
   recordOid: string;
   hours: number;
   minutes: number;
@@ -40,6 +42,19 @@ export interface DaySummary {
   bookedMinutes: number;
   unbookedHours: number;
   unbookedMinutes: number;
+}
+
+export interface DaySummaryWithDate {
+  date: string;
+  summary: DaySummary;
+}
+
+export interface WeekSummary {
+  days: DaySummaryWithDate[];
+  totalBookedHours: number;
+  totalBookedMinutes: number;
+  totalUnbookedHours: number;
+  totalUnbookedMinutes: number;
 }
 
 function buildDateParams(date: string): Record<string, string> {
@@ -122,6 +137,38 @@ export function toFormMap(fields: [string, string][]): Map<string, string> {
   return new Map(fields);
 }
 
+export function parsePspTreeNames(html: string): Map<string, string> {
+  const root = parseHtml(html);
+  const names = new Map<string, string>();
+
+  for (const input of root.querySelectorAll("input[name]")) {
+    const name = input.getAttribute("name");
+    if (!name) continue;
+    if (!name.includes(`${PSP_PREFIX},recordType,listeditoid_`)) continue;
+    if (!name.endsWith(".recordType")) continue;
+
+    const oidMatch = /listeditoid_([^.]+)/.exec(name);
+    const oid = oidMatch?.[1];
+    if (!oid || oid.includes("$new$")) continue;
+
+    // Walk up to <tr> ancestor
+    let node = input.parentNode;
+    while (node && node.tagName !== "TR") {
+      node = node.parentNode;
+    }
+    if (!node) continue;
+
+    // Extract visible name from <a><span> in the same row
+    const nameSpan = node.querySelector("a span");
+    const displayName = nameSpan?.text?.trim();
+    if (displayName) {
+      names.set(oid, displayName);
+    }
+  }
+
+  return names;
+}
+
 export function parseAttendance(html: string): AttendanceEntry[] {
   const formState = toFormMap(parseFormState(html));
   const entries: AttendanceEntry[] = [];
@@ -162,7 +209,10 @@ export function parseAttendance(html: string): AttendanceEntry[] {
   return entries;
 }
 
-export function parseProjectAggregates(html: string): ProjectAggregate[] {
+export function parseProjectAggregates(
+  html: string,
+  names?: Map<string, string>,
+): ProjectAggregate[] {
   const formState = toFormMap(parseFormState(html));
   const projects: ProjectAggregate[] = [];
 
@@ -180,6 +230,7 @@ export function parseProjectAggregates(html: string): ProjectAggregate[] {
       const minKey = `${PSP_PREFIX},effortExpense,listeditoid_${oid}.effortExpense_minute`;
       projects.push({
         projectOid: oid,
+        name: names?.get(oid) ?? oid,
         hours: parseInt(formState.get(hourKey) ?? "0", 10) || 0,
         minutes: parseInt(formState.get(minKey) ?? "0", 10) || 0,
       });
@@ -189,7 +240,10 @@ export function parseProjectAggregates(html: string): ProjectAggregate[] {
   return projects;
 }
 
-export function parseExpandedTasks(fields: [string, string][]): TaskDetail[] {
+export function parseExpandedTasks(
+  fields: [string, string][],
+  names?: Map<string, string>,
+): TaskDetail[] {
   const m = toFormMap(fields);
   const tasks: TaskDetail[] = [];
 
@@ -204,6 +258,7 @@ export function parseExpandedTasks(fields: [string, string][]): TaskDetail[] {
 
       tasks.push({
         lineOid,
+        name: names?.get(lineOid) ?? lineOid,
         recordOid:
           m.get(`${PSP_PREFIX},recordOid,listeditoid_${lineOid}.recordOid`) ??
           "",
@@ -236,7 +291,8 @@ export function parseExpandedTasks(fields: [string, string][]): TaskDetail[] {
 export async function getDaySummary(date: string): Promise<DaySummary> {
   const html = await fetchDayPage(date);
   const attendance = parseAttendance(html);
-  const projects = parseProjectAggregates(html);
+  const names = parsePspTreeNames(html);
+  const projects = parseProjectAggregates(html, names);
 
   let bookedTotal = 0;
   for (const p of projects) {
@@ -245,10 +301,12 @@ export async function getDaySummary(date: string): Promise<DaySummary> {
 
   let workingMinutes = 0;
   for (const a of attendance) {
-    if (a.recordType === "unsavedAttendance") {
-      workingMinutes += a.durationHour * 60 + a.durationMinute;
-    } else if (a.recordType === "unsavedPause") {
+    if (a.recordType === "unsavedPause") {
       workingMinutes -= a.durationHour * 60 + a.durationMinute;
+    } else {
+      // All non-pause types count as working time:
+      // unsavedAttendance, distributed, undistributed, etc.
+      workingMinutes += a.durationHour * 60 + a.durationMinute;
     }
   }
 
@@ -261,6 +319,51 @@ export async function getDaySummary(date: string): Promise<DaySummary> {
     bookedMinutes: bookedTotal % 60,
     unbookedHours: Math.floor(unbookedTotal / 60),
     unbookedMinutes: unbookedTotal % 60,
+  };
+}
+
+function formatDateLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function getWeekDates(dateInWeek: string): string[] {
+  const d = new Date(dateInWeek + "T12:00:00");
+  const dayOfWeek = d.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + mondayOffset);
+
+  const dates: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    const day = new Date(monday);
+    day.setDate(monday.getDate() + i);
+    dates.push(formatDateLocal(day));
+  }
+  return dates;
+}
+
+export async function getWeekSummary(dateInWeek: string): Promise<WeekSummary> {
+  const dates = getWeekDates(dateInWeek);
+  const summaries = await Promise.all(dates.map((d) => getDaySummary(d)));
+
+  let totalBooked = 0;
+  let totalUnbooked = 0;
+  const days: DaySummaryWithDate[] = dates.map((date, i) => {
+    const summary = summaries[i]!;
+    totalBooked += summary.bookedHours * 60 + summary.bookedMinutes;
+    totalUnbooked += summary.unbookedHours * 60 + summary.unbookedMinutes;
+    return { date, summary };
+  });
+
+  return {
+    days,
+    totalBookedHours: Math.floor(totalBooked / 60),
+    totalBookedMinutes: totalBooked % 60,
+    totalUnbookedHours: Math.floor(totalUnbooked / 60),
+    totalUnbookedMinutes: totalUnbooked % 60,
   };
 }
 
@@ -278,8 +381,8 @@ export async function getTasksForProject(
     );
   }
 
-  const taskFields = await expandTreeNode(projectOid);
-  return parseExpandedTasks(taskFields);
+  const { fields, names } = await expandTreeNode(projectOid);
+  return parseExpandedTasks(fields, names);
 }
 
 export async function setAttendance(params: {
@@ -294,11 +397,14 @@ export async function setAttendance(params: {
   const config = getConfig();
   const html = await fetchDayPage(params.date);
   const formFields = parseFormState(html);
-  const formMap = toFormMap(formFields);
 
-  // Find $new$ attendance OID
-  let attendanceOid: string | undefined;
-  let pauseOid: string | undefined;
+  // Check for existing saved attendance (non-$new$ rows)
+  const existingAttendance = parseAttendance(html);
+
+  // Find $new$ attendance and pause OIDs
+  const formMap = toFormMap(formFields);
+  let newAttendanceOid: string | undefined;
+  let newPauseOid: string | undefined;
   for (const [key, value] of formMap) {
     if (
       key.includes(`${ATTENDANCE_PREFIX},recordType,listeditoid_`) &&
@@ -307,25 +413,40 @@ export async function setAttendance(params: {
     ) {
       const m = /listeditoid_([^.]+)/.exec(key);
       if (!m?.[1]) continue;
-      if (value === "unsavedAttendance") attendanceOid = m[1];
-      if (value === "unsavedPause") pauseOid = m[1];
+      if (value === "unsavedAttendance") newAttendanceOid = m[1];
+      if (value === "unsavedPause") newPauseOid = m[1];
     }
   }
 
+  // Use existing attendance OID if available, otherwise $new$
+  const attendanceOid =
+    existingAttendance.length > 0
+      ? existingAttendance[0]!.oid
+      : newAttendanceOid;
+
   if (!attendanceOid) {
-    throw new Error("No $new$ attendance row found on page");
+    throw new Error("No attendance row found on page");
   }
 
-  // Filter out $new$ attendance rows we don't want to submit
-  const keepOids = new Set<string>([attendanceOid]);
-  if (pauseOid && (params.pauseHour || params.pauseMinute)) {
-    keepOids.add(pauseOid);
+  // Filter out ALL $new$ attendance rows when updating existing,
+  // or keep only the ones we need when creating new
+  let filteredFields: [string, string][];
+  if (existingAttendance.length > 0) {
+    // Existing attendance: filter out all $new$ rows
+    filteredFields = formFields.filter(
+      ([name]) => !name.includes("daytimerecordingAttendance,$new$"),
+    );
+  } else {
+    // New attendance: keep only the OIDs we're using
+    const keepOids = new Set<string>([attendanceOid]);
+    if (newPauseOid && (params.pauseHour || params.pauseMinute)) {
+      keepOids.add(newPauseOid);
+    }
+    filteredFields = formFields.filter(([name]) => {
+      if (!name.includes("daytimerecordingAttendance,$new$")) return true;
+      return [...keepOids].some((oid) => name.includes(oid));
+    });
   }
-
-  const filteredFields = formFields.filter(([name]) => {
-    if (!name.includes("daytimerecordingAttendance,$new$")) return true;
-    return [...keepOids].some((oid) => name.includes(oid));
-  });
 
   const body = new URLSearchParams(filteredFields);
 
@@ -349,15 +470,15 @@ export async function setAttendance(params: {
     String(params.endMinute).padStart(2, "0"),
   );
 
-  // Set pause if provided
-  if (pauseOid && (params.pauseHour || params.pauseMinute)) {
+  // Set pause if provided (only for $new$ rows — existing pause handling TBD)
+  if (newPauseOid && (params.pauseHour || params.pauseMinute)) {
     setField(
-      pauseOid,
+      newPauseOid,
       "attandenceDuration_hour",
       String(params.pauseHour ?? 0),
     );
     setField(
-      pauseOid,
+      newPauseOid,
       "attandenceDuration_minute",
       String(params.pauseMinute ?? 0).padStart(2, "0"),
     );
@@ -381,9 +502,14 @@ export async function setAttendance(params: {
   return { success: response.ok };
 }
 
+export interface ExpandedTreeResult {
+  fields: [string, string][];
+  names: Map<string, string>;
+}
+
 export async function expandTreeNode(
   projectOid: string,
-): Promise<[string, string][]> {
+): Promise<ExpandedTreeResult> {
   const config = getConfig();
   const url =
     `${config.BCS_URL}${PAGE_PATH}` +
@@ -398,9 +524,13 @@ export async function expandTreeNode(
   const json = await response.text();
 
   const data: unknown = JSON.parse(json);
-  if (!data || typeof data !== "object" || !("html" in data)) return [];
-  const html = (data as { html: string }).html;
-  return parseFormState(`<form>${html}</form>`);
+  if (!data || typeof data !== "object" || !("html" in data))
+    return { fields: [], names: new Map() };
+  const wrappedHtml = `<form>${(data as { html: string }).html}</form>`;
+  return {
+    fields: parseFormState(wrappedHtml),
+    names: parsePspTreeNames(wrappedHtml),
+  };
 }
 
 export async function deleteEffort(params: {
@@ -412,7 +542,7 @@ export async function deleteEffort(params: {
   const html = await fetchDayPage(params.date);
   const formFields = parseFormState(html);
 
-  const taskFields = await expandTreeNode(params.projectOid);
+  const { fields: taskFields } = await expandTreeNode(params.projectOid);
   const taskMap = toFormMap(taskFields);
 
   const taskLineOid = params.taskLineOid;
@@ -501,7 +631,7 @@ export async function bookEffort(params: {
   }
 
   // Step 2: AJAX expand project to get task rows
-  const taskFields = await expandTreeNode(params.projectOid);
+  const { fields: taskFields } = await expandTreeNode(params.projectOid);
   const taskMap = toFormMap(taskFields);
 
   // Verify task exists in expanded tree

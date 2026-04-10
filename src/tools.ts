@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   getDaySummary,
+  getWeekSummary,
   getTasksForProject,
   bookEffort,
   deleteEffort,
@@ -9,6 +10,8 @@ import {
 } from "./api.js";
 import type {
   DaySummary,
+  WeekSummary,
+  DaySummaryWithDate,
   ProjectAggregate,
   TaskDetail,
   AttendanceEntry,
@@ -30,7 +33,7 @@ function formatAttendance(entries: AttendanceEntry[]): string {
 function formatProjects(projects: ProjectAggregate[]): string {
   if (projects.length === 0) return "No projects found.";
   return projects
-    .map((p) => `- ${p.projectOid}: ${p.hours}h ${p.minutes}m`)
+    .map((p) => `- ${p.name} (${p.projectOid}): ${p.hours}h ${p.minutes}m`)
     .join("\n");
 }
 
@@ -47,17 +50,59 @@ function formatDaySummary(summary: DaySummary): string {
   ].join("\n");
 }
 
+const WEEKDAY_NAMES = ["Mo", "Di", "Mi", "Do", "Fr"];
+
+function formatDayLine(entry: DaySummaryWithDate, index: number): string {
+  const day = WEEKDAY_NAMES[index] ?? entry.date;
+  const booked = `${entry.summary.bookedHours}h ${entry.summary.bookedMinutes}m`;
+  const unbooked =
+    entry.summary.unbookedHours + entry.summary.unbookedMinutes > 0
+      ? ` (unbooked: ${entry.summary.unbookedHours}h ${entry.summary.unbookedMinutes}m)`
+      : "";
+  const projects = entry.summary.projects
+    .filter((p) => p.hours > 0 || p.minutes > 0)
+    .map((p) => `${p.name}: ${p.hours}h ${p.minutes}m`)
+    .join(", ");
+  return `${day} ${entry.date}: ${booked}${unbooked}${projects ? ` [${projects}]` : ""}`;
+}
+
+function formatWeekSummary(week: WeekSummary): string {
+  const dayLines = week.days.map((d, i) => formatDayLine(d, i));
+  return [
+    ...dayLines,
+    "",
+    `Week total booked: ${week.totalBookedHours}h ${week.totalBookedMinutes}m`,
+    `Week total unbooked: ${week.totalUnbookedHours}h ${week.totalUnbookedMinutes}m`,
+  ].join("\n");
+}
+
 function formatTasks(tasks: TaskDetail[]): string {
   if (tasks.length === 0) return "No tasks found for this project.";
   return tasks
     .map(
       (t) =>
-        `- ${t.lineOid} (${t.recordType}): ${t.hours}h ${t.minutes}m${t.description ? ` — ${t.description}` : ""}`,
+        `- ${t.name} [${t.lineOid}] (${t.recordType}): ${t.hours}h ${t.minutes}m${t.description ? ` — ${t.description}` : ""}`,
     )
     .join("\n");
 }
 
 export function registerTools(server: McpServer): void {
+  server.tool(
+    "bcs_get_week_summary",
+    "Get overview for an entire work week (Mon-Fri): per-day attendance, projects, booked/unbooked, plus weekly totals. Pass any date in the target week.",
+    {
+      date: z
+        .string()
+        .describe(
+          "Any date in the target week (YYYY-MM-DD). Monday is derived automatically.",
+        ),
+    },
+    async ({ date }) => {
+      const week = await getWeekSummary(date);
+      return { content: [{ type: "text", text: formatWeekSummary(week) }] };
+    },
+  );
+
   server.tool(
     "bcs_get_day_summary",
     "Get day overview: attendance times, projects with booked hours, and unbooked remainder. Use this first to see the current state.",

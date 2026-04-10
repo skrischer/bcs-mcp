@@ -76,10 +76,12 @@ BCS uses **form-based server-side rendering**, not a REST API. The integration w
 
 | Tool | Description |
 |------|-------------|
-| `bcs_get_day_summary` | Day overview: attendance, projects with aggregate hours, booked/unbooked |
-| `bcs_get_tasks` | List bookable tasks for a project (AJAX tree expansion) |
+| `bcs_get_week_summary` | Week overview (Mon-Fri): per-day booked/unbooked + weekly totals |
+| `bcs_get_day_summary` | Day overview: attendance, projects with names and aggregate hours, booked/unbooked |
+| `bcs_get_tasks` | List bookable tasks for a project with names (AJAX tree expansion) |
 | `bcs_book_effort` | Book time to a task via 3-step form POST |
-| `bcs_set_attendance` | Set attendance times (start/end/pause) |
+| `bcs_delete_effort` | Delete a booked effort entry |
+| `bcs_set_attendance` | Set attendance times (start/end/pause), handles both new and existing entries |
 
 ## Claude Desktop Integration
 
@@ -104,9 +106,11 @@ Add to `claude_desktop_config.json`:
 
 ## Known Issues
 
-- Project/task names are not available in the HTML (rendered clientside). Only OIDs are returned.
+- Project/task names are extracted from `<a><span>` elements in PSP tree `<tr>` rows via `parsePspTreeNames()`. Same DOM structure for page HTML and AJAX expand responses.
 - Task-level OIDs require AJAX tree expansion per project (`expandTreeNode`).
 - Booking via form POST sends the entire form state (~430 fields). `$new$` attendance rows must be filtered to avoid side effects.
+- `setAttendance` handles both new entries (`$new$` rows) and updating existing saved attendance.
+- Attendance recordTypes: `unsavedAttendance`/`distributed`/`undistributed` = working time, `unsavedPause` = pause. All non-pause types count as working time.
 - Session persistence uses a local `.bcs-session` file (30 min TTL).
 - BCS field names use `attandence` (misspelled) — must match exactly.
 

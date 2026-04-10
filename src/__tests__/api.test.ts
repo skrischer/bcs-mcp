@@ -4,6 +4,8 @@ import {
   parseAttendance,
   parseProjectAggregates,
   parseExpandedTasks,
+  parsePspTreeNames,
+  getWeekDates,
 } from "../api.js";
 
 const SAMPLE_HTML = `
@@ -30,17 +32,31 @@ const SAMPLE_HTML = `
   <!-- Attendance: $new$ pause row -->
   <input type="hidden" name="daytimerecording,Content,daytimerecordingAttendance,Columns,recordType,listeditoid_$new$5678_JTimeSpan.recordType" value="unsavedPause">
 
-  <!-- PSP Tree: projects -->
-  <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordOid,listeditoid_USER1.recordOid" value="USER1">
-  <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordType,listeditoid_USER1.recordType" value="root">
-  <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordOid,listeditoid_PROJ1.recordOid" value="PROJ1">
-  <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordType,listeditoid_PROJ1.recordType" value="project">
-  <input type="text" name="daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_PROJ1.effortExpense_hour" value="4">
-  <input type="text" name="daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_PROJ1.effortExpense_minute" value="30">
-  <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordOid,listeditoid_PROJ2.recordOid" value="PROJ2">
-  <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordType,listeditoid_PROJ2.recordType" value="project">
-  <input type="text" name="daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_PROJ2.effortExpense_hour" value="0">
-  <input type="text" name="daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_PROJ2.effortExpense_minute" value="0">
+  <!-- PSP Tree: projects (each row has hidden inputs + visible name in nested table) -->
+  <table><tbody>
+  <tr>
+    <td><input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordOid,listeditoid_USER1.recordOid" value="USER1">
+    <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordType,listeditoid_USER1.recordType" value="root"></td>
+    <td></td><td></td>
+    <td><table><tbody><tr><td></td><td><table><tbody><tr><td><a><span>Max Mustermann</span></a></td></tr></tbody></table></td></tr></tbody></table></td>
+  </tr>
+  <tr>
+    <td><input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordOid,listeditoid_PROJ1.recordOid" value="PROJ1">
+    <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordType,listeditoid_PROJ1.recordType" value="project">
+    <input type="text" name="daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_PROJ1.effortExpense_hour" value="4">
+    <input type="text" name="daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_PROJ1.effortExpense_minute" value="30"></td>
+    <td></td><td></td>
+    <td><table><tbody><tr><td></td><td><table><tbody><tr><td><a><span>Akquise</span></a></td></tr></tbody></table></td></tr></tbody></table></td>
+  </tr>
+  <tr>
+    <td><input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordOid,listeditoid_PROJ2.recordOid" value="PROJ2">
+    <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordType,listeditoid_PROJ2.recordType" value="project">
+    <input type="text" name="daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_PROJ2.effortExpense_hour" value="0">
+    <input type="text" name="daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_PROJ2.effortExpense_minute" value="0"></td>
+    <td></td><td></td>
+    <td><table><tbody><tr><td></td><td><table><tbody><tr><td><a><span>Internes Projekt</span></a></td></tr></tbody></table></td></tr></tbody></table></td>
+  </tr>
+  </tbody></table>
 
   <select name="someSetting">
     <option value="a">A</option>
@@ -50,7 +66,24 @@ const SAMPLE_HTML = `
 </body></html>
 `;
 
-// Simulates fields returned by expandTreeNode (AJAX response)
+// Simulates AJAX HTML returned by expandTreeNode (wrapped in <form>)
+const EXPANDED_TASK_HTML = `<form>
+<table><tbody>
+<tr>
+  <td>
+    <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordType,listeditoid_TASK1.recordType" value="effort">
+    <input type="hidden" name="daytimerecording,Content,daytimerecordingPspTree,Columns,recordOid,listeditoid_TASK1.recordOid" value="TASK1_RECORD">
+    <input type="text" name="daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_TASK1.effortExpense_hour" value="2">
+    <input type="text" name="daytimerecording,Content,daytimerecordingPspTree,Columns,effortExpense,listeditoid_TASK1.effortExpense_minute" value="15">
+    <input type="text" name="daytimerecording,Content,daytimerecordingPspTree,Columns,description,listeditoid_TASK1.description" value="JIRA-42">
+  </td>
+  <td></td><td></td>
+  <td><table><tbody><tr><td></td><td><table><tbody><tr><td><a><span>Neukundenakquise</span></a></td></tr></tbody></table></td></tr></tbody></table></td>
+</tr>
+</tbody></table>
+</form>`;
+
+// Flat field pairs (extracted from EXPANDED_TASK_HTML by parseFormState)
 const EXPANDED_TASK_FIELDS: [string, string][] = [
   [
     "daytimerecording,Content,daytimerecordingPspTree,Columns,recordType,listeditoid_TASK1.recordType",
@@ -128,19 +161,51 @@ describe("api", () => {
     });
   });
 
+  describe("parsePspTreeNames", () => {
+    it("extracts project names from PSP tree rows", () => {
+      const names = parsePspTreeNames(SAMPLE_HTML);
+      expect(names.get("PROJ1")).toBe("Akquise");
+      expect(names.get("PROJ2")).toBe("Internes Projekt");
+    });
+
+    it("extracts root row name", () => {
+      const names = parsePspTreeNames(SAMPLE_HTML);
+      expect(names.get("USER1")).toBe("Max Mustermann");
+    });
+
+    it("extracts task names from AJAX expand HTML", () => {
+      const names = parsePspTreeNames(EXPANDED_TASK_HTML);
+      expect(names.get("TASK1")).toBe("Neukundenakquise");
+    });
+
+    it("returns empty map for html without PSP tree", () => {
+      const names = parsePspTreeNames("<html><body></body></html>");
+      expect(names.size).toBe(0);
+    });
+  });
+
   describe("parseProjectAggregates", () => {
-    it("extracts project aggregates from PSP tree", () => {
-      const projects = parseProjectAggregates(SAMPLE_HTML);
+    it("extracts project aggregates with names from PSP tree", () => {
+      const names = parsePspTreeNames(SAMPLE_HTML);
+      const projects = parseProjectAggregates(SAMPLE_HTML, names);
       expect(projects).toHaveLength(2);
 
       const proj1 = projects.find((p) => p.projectOid === "PROJ1");
       expect(proj1).toBeDefined();
+      expect(proj1?.name).toBe("Akquise");
       expect(proj1?.hours).toBe(4);
       expect(proj1?.minutes).toBe(30);
 
       const proj2 = projects.find((p) => p.projectOid === "PROJ2");
+      expect(proj2?.name).toBe("Internes Projekt");
       expect(proj2?.hours).toBe(0);
       expect(proj2?.minutes).toBe(0);
+    });
+
+    it("falls back to OID when no names provided", () => {
+      const projects = parseProjectAggregates(SAMPLE_HTML);
+      const proj1 = projects.find((p) => p.projectOid === "PROJ1");
+      expect(proj1?.name).toBe("PROJ1");
     });
 
     it("skips root rows", () => {
@@ -156,12 +221,14 @@ describe("api", () => {
   });
 
   describe("parseExpandedTasks", () => {
-    it("extracts tasks from expanded tree fields", () => {
-      const tasks = parseExpandedTasks(EXPANDED_TASK_FIELDS);
+    it("extracts tasks with names from expanded tree", () => {
+      const names = parsePspTreeNames(EXPANDED_TASK_HTML);
+      const tasks = parseExpandedTasks(EXPANDED_TASK_FIELDS, names);
       expect(tasks).toHaveLength(1);
 
       const task = tasks[0]!;
       expect(task.lineOid).toBe("TASK1");
+      expect(task.name).toBe("Neukundenakquise");
       expect(task.recordOid).toBe("TASK1_RECORD");
       expect(task.hours).toBe(2);
       expect(task.minutes).toBe(15);
@@ -169,9 +236,39 @@ describe("api", () => {
       expect(task.recordType).toBe("effort");
     });
 
+    it("falls back to lineOid when no names provided", () => {
+      const tasks = parseExpandedTasks(EXPANDED_TASK_FIELDS);
+      expect(tasks[0]?.name).toBe("TASK1");
+    });
+
     it("returns empty array for empty fields", () => {
       const tasks = parseExpandedTasks([]);
       expect(tasks).toHaveLength(0);
+    });
+  });
+
+  describe("getWeekDates", () => {
+    it("returns Mon-Fri for a Wednesday", () => {
+      const dates = getWeekDates("2026-04-08"); // Wednesday
+      expect(dates).toEqual([
+        "2026-04-06",
+        "2026-04-07",
+        "2026-04-08",
+        "2026-04-09",
+        "2026-04-10",
+      ]);
+    });
+
+    it("returns Mon-Fri for a Monday", () => {
+      const dates = getWeekDates("2026-04-06"); // Monday
+      expect(dates[0]).toBe("2026-04-06");
+      expect(dates[4]).toBe("2026-04-10");
+    });
+
+    it("returns Mon-Fri for a Sunday", () => {
+      const dates = getWeekDates("2026-04-12"); // Sunday
+      expect(dates[0]).toBe("2026-04-06");
+      expect(dates[4]).toBe("2026-04-10");
     });
   });
 });
