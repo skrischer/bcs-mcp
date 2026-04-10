@@ -66,41 +66,50 @@ export async function fetchDayPage(date: string): Promise<string> {
   return response.text();
 }
 
-export function parseFormState(html: string): Map<string, string> {
+export function parseFormState(html: string): [string, string][] {
   const root = parseHtml(html);
-  const fields = new Map<string, string>();
+  // Note: BCS has nested forms (invalid HTML), so we parse from root
+  // to capture all fields. Non-submittable types are filtered below.
+  const form = root;
+  const fields: [string, string][] = [];
 
-  for (const el of root.querySelectorAll("input[name]")) {
+  for (const el of form.querySelectorAll("input[name]")) {
     const name = el.getAttribute("name");
     if (!name) continue;
     const type = el.getAttribute("type")?.toLowerCase();
+    // Skip non-submittable types (only included when clicked)
+    if (type === "submit" || type === "image" || type === "button") continue;
     if (type === "checkbox" || type === "radio") {
       if (el.getAttribute("checked") !== null) {
-        fields.set(name, el.getAttribute("value") ?? "on");
+        fields.push([name, el.getAttribute("value") ?? "on"]);
       }
     } else {
-      fields.set(name, el.getAttribute("value") ?? "");
+      fields.push([name, el.getAttribute("value") ?? ""]);
     }
   }
 
-  for (const el of root.querySelectorAll("textarea[name]")) {
+  for (const el of form.querySelectorAll("textarea[name]")) {
     const name = el.getAttribute("name");
     if (!name) continue;
-    fields.set(name, el.text ?? "");
+    fields.push([name, el.text ?? ""]);
   }
 
-  for (const el of root.querySelectorAll("select[name]")) {
+  for (const el of form.querySelectorAll("select[name]")) {
     const name = el.getAttribute("name");
     if (!name) continue;
     const selected = el.querySelector("option[selected]");
-    fields.set(name, selected?.getAttribute("value") ?? "");
+    fields.push([name, selected?.getAttribute("value") ?? ""]);
   }
 
   return fields;
 }
 
+function toFormMap(fields: [string, string][]): Map<string, string> {
+  return new Map(fields);
+}
+
 export function parseBookings(html: string): BookingEntry[] {
-  const formState = parseFormState(html);
+  const formState = toFormMap(parseFormState(html));
   const entries: BookingEntry[] = [];
   const seenOids = new Set<string>();
 
@@ -137,7 +146,7 @@ export function parseBookings(html: string): BookingEntry[] {
 }
 
 export function parseTasks(html: string): TaskEntry[] {
-  const formState = parseFormState(html);
+  const formState = toFormMap(parseFormState(html));
   const tasks: TaskEntry[] = [];
   const seenOids = new Set<string>();
 
@@ -223,6 +232,26 @@ export async function getBookingTasks(date?: string): Promise<TaskEntry[]> {
   return parseTasks(html);
 }
 
+async function expandTreeNode(projectOid: string): Promise<[string, string][]> {
+  const config = getConfig();
+  const url =
+    `${config.BCS_URL}${PAGE_PATH}` +
+    `?object=daytimerecording,Content,daytimerecordingPspTree` +
+    `&ajax_request=open` +
+    `&ajax_oid=${encodeURIComponent(projectOid)}` +
+    `&ajax_data=true&level=1&row_id=1&ajax_messageColumnAdded=true` +
+    `&timestamp=${Date.now()}` +
+    `&oid=${config.BCS_USER_OID}`;
+
+  const response = await authenticatedFetch(url);
+  const json = await response.text();
+
+  const data: unknown = JSON.parse(json);
+  if (!data || typeof data !== "object" || !("html" in data)) return [];
+  const html = (data as { html: string }).html;
+  return parseFormState(`<form>${html}</form>`);
+}
+
 export async function bookEffort(params: {
   date: string;
   taskOid: string;
@@ -234,38 +263,58 @@ export async function bookEffort(params: {
 
   // Step 1: GET page to obtain form state
   const html = await fetchDayPage(params.date);
-  const formState = parseFormState(html);
+  const formFields = parseFormState(html);
+  const formMap = toFormMap(formFields);
 
-  // Step 2: Find the matching line OID for the task
-  const lineOid = findLineOidForTask(formState, params.taskOid);
-  if (!lineOid) {
+  // Step 2: Find the project that contains the task, then expand it via AJAX
+  const projectOid = findProjectForTask(formMap, params.taskOid);
+  if (!projectOid) {
     throw new Error(
-      `Task OID ${params.taskOid} not found on day page. Available tasks: ${getAvailableTaskOids(formState).join(", ")}`,
+      `Task OID ${params.taskOid} not found on day page. Available: ${getAvailableTaskOids(formMap).join(", ")}`,
     );
   }
 
-  // Step 3: Set effort fields
-  const hourKey = `${PSP_PREFIX},effortExpense,listeditoid_${lineOid}.effortExpense_hour`;
-  const minuteKey = `${PSP_PREFIX},effortExpense,listeditoid_${lineOid}.effortExpense_minute`;
-  const descKey = `${PSP_PREFIX},description,listeditoid_${lineOid}.description`;
+  const taskFields = await expandTreeNode(projectOid);
+  const taskMap = toFormMap(taskFields);
 
-  formState.set(hourKey, String(params.hours));
-  formState.set(minuteKey, String(params.minutes));
-  formState.set(descKey, params.description);
-
-  // Step 4: Set form submission flags
-  formState.set("daytimerecording,formsubmitted", "true");
-
-  // Step 5: POST the form
-  const body = new URLSearchParams();
-  for (const [key, value] of formState) {
-    body.set(key, value);
+  // Step 3: Find the task-level OID in the expanded tree
+  const taskLineOid = findTaskLineOid(taskMap, params.taskOid);
+  if (!taskLineOid) {
+    throw new Error(
+      `Task OID ${params.taskOid} not found in expanded tree for project ${projectOid}`,
+    );
   }
 
+  // Step 4: Merge page fields + expanded task fields, set values.
+  // Filter out $new$ attendance rows to avoid creating unintended attendance entries.
+  const filteredFields = formFields.filter(
+    ([name]) => !name.includes("daytimerecordingAttendance,$new$"),
+  );
+  const body = new URLSearchParams([...filteredFields, ...taskFields]);
+
+  const hourKey = `${PSP_PREFIX},effortExpense,listeditoid_${taskLineOid}.effortExpense_hour`;
+  const minuteKey = `${PSP_PREFIX},effortExpense,listeditoid_${taskLineOid}.effortExpense_minute`;
+  body.set(hourKey, String(params.hours));
+  body.set(minuteKey, String(params.minutes));
+
+  const descKey = `${PSP_PREFIX},description,listeditoid_${taskLineOid}.description`;
+  if (taskMap.has(descKey)) {
+    body.set(descKey, params.description);
+  }
+
+  // Step 5: Submission flags
+  body.set("daytimerecording,Apply", "Speichern");
+  body.set("PageForm,formChangedIndicator", "true");
+
+  // Step 6: POST
   const url = `${config.BCS_URL}${PAGE_PATH}`;
   const response = await authenticatedFetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Origin: config.BCS_URL,
+      Referer: `${config.BCS_URL}${PAGE_PATH}?oid=${config.BCS_USER_OID}`,
+    },
     body: body.toString(),
   });
 
@@ -273,39 +322,65 @@ export async function bookEffort(params: {
     throw new Error(`Failed to book effort: ${response.status}`);
   }
 
-  // Step 6: Parse response to verify booking
+  // Step 7: Verify by checking PSP tree aggregate in response
   const responseHtml = await response.text();
+  const responseMap = toFormMap(parseFormState(responseHtml));
+  const afterHour = `${PSP_PREFIX},effortExpense,listeditoid_${projectOid}.effortExpense_hour`;
+  const afterMin = `${PSP_PREFIX},effortExpense,listeditoid_${projectOid}.effortExpense_minute`;
+  const projectHours = parseInt(responseMap.get(afterHour) ?? "0", 10);
+  const projectMinutes = parseInt(responseMap.get(afterMin) ?? "0", 10);
+  const projectTotal = projectHours * 60 + projectMinutes;
+  const requestedTotal = params.hours * 60 + params.minutes;
+  const success = projectTotal >= requestedTotal;
+
   const entries = parseBookings(responseHtml);
-
-  const bookedEntry = entries.find(
-    (e) => e.oid === lineOid || e.taskOid === params.taskOid,
-  );
-  const success =
-    bookedEntry !== undefined &&
-    bookedEntry.hours === params.hours &&
-    bookedEntry.minutes === params.minutes;
-
   return { success, entries };
 }
 
-function findLineOidForTask(
+function findProjectForTask(
   formState: Map<string, string>,
   taskOid: string,
 ): string | undefined {
-  // The taskOid might be the recordOid value or the listeditoid key itself
+  // Project-level rows have recordType "project" and their listeditoid IS the project OID.
+  // The taskOid can be a project OID directly or a line OID in the tree.
   for (const [key, value] of formState) {
     if (
-      key.includes(`${PSP_PREFIX},recordOid,listeditoid_`) &&
-      key.endsWith(".recordOid")
+      key.includes(`${PSP_PREFIX},recordType,listeditoid_`) &&
+      key.endsWith(".recordType") &&
+      value === "project"
     ) {
-      const lineMatch = /listeditoid_([^.]+)/.exec(key);
-      const lineOid = lineMatch?.[1];
+      const m = /listeditoid_([^.]+)/.exec(key);
+      const lineOid = m?.[1];
       if (!lineOid) continue;
-
-      // Match by recordOid value
-      if (value === taskOid) return lineOid;
-      // Match by line OID directly
       if (lineOid === taskOid) return lineOid;
+    }
+  }
+  return undefined;
+}
+
+function findTaskLineOid(
+  taskFields: Map<string, string>,
+  taskOid: string,
+): string | undefined {
+  // After AJAX expand, task rows appear with their own listeditoid.
+  // Match by listeditoid directly or by recordOid value.
+  for (const [key, value] of taskFields) {
+    if (
+      key.includes(`${PSP_PREFIX},recordType,listeditoid_`) &&
+      key.endsWith(".recordType")
+    ) {
+      const m = /listeditoid_([^.]+)/.exec(key);
+      const lineOid = m?.[1];
+      if (!lineOid) continue;
+      if (lineOid === taskOid) return lineOid;
+    }
+    if (
+      key.includes(`${PSP_PREFIX},recordOid,listeditoid_`) &&
+      key.endsWith(".recordOid") &&
+      value === taskOid
+    ) {
+      const m = /listeditoid_([^.]+)/.exec(key);
+      if (m?.[1]) return m[1];
     }
   }
   return undefined;
@@ -315,11 +390,12 @@ function getAvailableTaskOids(formState: Map<string, string>): string[] {
   const oids: string[] = [];
   for (const [key, value] of formState) {
     if (
-      key.includes(`${PSP_PREFIX},recordOid,listeditoid_`) &&
-      key.endsWith(".recordOid") &&
-      value
+      key.includes(`${PSP_PREFIX},recordType,listeditoid_`) &&
+      key.endsWith(".recordType") &&
+      value === "project"
     ) {
-      oids.push(value);
+      const m = /listeditoid_([^.]+)/.exec(key);
+      if (m?.[1]) oids.push(m[1]);
     }
   }
   return oids;

@@ -44,7 +44,7 @@ const SAMPLE_HTML = `
 describe("api", () => {
   describe("parseFormState", () => {
     it("extracts all input, textarea, and select fields", () => {
-      const state = parseFormState(SAMPLE_HTML);
+      const state = new Map(parseFormState(SAMPLE_HTML));
 
       expect(state.get("transactionId")).toBe("123-abc");
       expect(state.get("daytimerecording,formsubmitted")).toBe("");
@@ -52,15 +52,27 @@ describe("api", () => {
     });
 
     it("extracts textarea content", () => {
-      const state = parseFormState(SAMPLE_HTML);
+      const state = new Map(parseFormState(SAMPLE_HTML));
       const descKey =
         "daytimerecording,Content,daytimerecordingEvents,Columns,description,listeditoid_EFFORT1.description";
       expect(state.get(descKey)).toBe("HYBRIS-1234");
     });
 
-    it("returns empty map for empty html", () => {
+    it("returns empty array for empty html", () => {
       const state = parseFormState("<html><body></body></html>");
-      expect(state.size).toBe(0);
+      expect(state).toHaveLength(0);
+    });
+
+    it("preserves duplicate field names", () => {
+      const html = `<html><body><form>
+        <input name="dup" value="first">
+        <input name="dup" value="second">
+      </form></body></html>`;
+      const state = parseFormState(html);
+      const dups = state.filter(([k]) => k === "dup");
+      expect(dups).toHaveLength(2);
+      expect(dups[0]?.[1]).toBe("first");
+      expect(dups[1]?.[1]).toBe("second");
     });
   });
 
