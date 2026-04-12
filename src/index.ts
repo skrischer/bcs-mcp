@@ -1,31 +1,28 @@
 import "dotenv/config";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerTools } from "./tools.js";
+import { createServer } from "node:http";
+import { createMcpHandler, getTransports } from "./server.js";
 
-const server = new McpServer({
-  name: "bcs-mcp",
-  version: "1.0.0",
+const handler = createMcpHandler();
+const port = parseInt(process.env.PORT ?? "3000", 10);
+
+const httpServer = createServer(async (req, res) => {
+  await handler(req, res);
 });
 
-registerTools(server);
-
-const transport = new StdioServerTransport();
-
-async function main(): Promise<void> {
-  await server.connect(transport);
-  console.error("[bcs-mcp] Server started on stdio");
-}
+httpServer.listen(port, () => {
+  console.error(`[bcs-mcp] Listening on http://localhost:${port}`);
+});
 
 function shutdown(): void {
   console.error("[bcs-mcp] Shutting down...");
-  server.close().then(() => process.exit(0));
+  const transports = getTransports();
+  for (const [sid, transport] of transports) {
+    transport.close().catch(() => {});
+    transports.delete(sid);
+  }
+  httpServer.close();
+  process.exit(0);
 }
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
-
-main().catch((err: unknown) => {
-  console.error("[bcs-mcp] Fatal error:", err);
-  process.exit(1);
-});

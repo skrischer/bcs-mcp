@@ -6,4 +6,5 @@ export default defineConfig({
   target: "node18",
   clean: true,
   sourcemap: true,
+  packages: "external",
 });

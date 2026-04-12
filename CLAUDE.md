@@ -83,6 +83,15 @@ BCS uses **form-based server-side rendering**, not a REST API. The integration w
 | `bcs_delete_effort` | Delete a booked effort entry |
 | `bcs_set_attendance` | Set attendance times (start/end/pause), handles both new and existing entries |
 
+## Setup
+
+```bash
+pnpm install
+cp .env.example .env   # then fill in your BCS credentials
+pnpm build
+pnpm start             # starts HTTP server on PORT (default 3000)
+```
+
 ## Claude Desktop Integration
 
 Add to `claude_desktop_config.json`:
@@ -91,18 +100,16 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "bcs": {
-      "command": "node",
-      "args": ["/absolute/path/to/bcs-mcp/dist/index.js"],
-      "env": {
-        "BCS_URL": "https://bcs.medienwerft.de",
-        "BCS_USERNAME": "your-username",
-        "BCS_PASSWORD": "your-password",
-        "BCS_USER_OID": "your-oid"
-      }
+      "url": "http://localhost:3000/mcp"
     }
   }
 }
 ```
+
+Config file location:
+- Windows (Store): `%LOCALAPPDATA%\Packages\Claude_...\LocalCache\Roaming\Claude\claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ## Known Issues
 

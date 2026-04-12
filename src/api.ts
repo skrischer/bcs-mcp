@@ -158,11 +158,15 @@ export function parsePspTreeNames(html: string): Map<string, string> {
     }
     if (!node) continue;
 
-    // Extract visible name from <a><span> in the same row
-    const nameSpan = node.querySelector("a span");
-    const displayName = nameSpan?.text?.trim();
-    if (displayName) {
-      names.set(oid, displayName);
+    // Extract full hierarchical path from all <a><span> elements in the row
+    const spans = node.querySelectorAll("a span");
+    const pathParts: string[] = [];
+    for (const span of spans) {
+      const text = span.text?.trim();
+      if (text) pathParts.push(text);
+    }
+    if (pathParts.length > 0) {
+      names.set(oid, pathParts.join(" > "));
     }
   }
 
@@ -347,7 +351,11 @@ export function getWeekDates(dateInWeek: string): string[] {
 
 export async function getWeekSummary(dateInWeek: string): Promise<WeekSummary> {
   const dates = getWeekDates(dateInWeek);
-  const summaries = await Promise.all(dates.map((d) => getDaySummary(d)));
+  // Sequential: BCS is stateful server-side, concurrent requests share date state
+  const summaries: DaySummary[] = [];
+  for (const d of dates) {
+    summaries.push(await getDaySummary(d));
+  }
 
   let totalBooked = 0;
   let totalUnbooked = 0;
@@ -527,8 +535,10 @@ export async function expandTreeNode(
   if (!data || typeof data !== "object" || !("html" in data))
     return { fields: [], names: new Map() };
   const wrappedHtml = `<form>${(data as { html: string }).html}</form>`;
+  const fields = parseFormState(wrappedHtml);
+
   return {
-    fields: parseFormState(wrappedHtml),
+    fields,
     names: parsePspTreeNames(wrappedHtml),
   };
 }
@@ -553,8 +563,11 @@ export async function deleteEffort(params: {
     );
   }
 
+  const taskFieldKeys = new Set(taskFields.map(([name]) => name));
   const filteredFields = formFields.filter(
-    ([name]) => !name.includes("daytimerecordingAttendance,$new$"),
+    ([name]) =>
+      !name.includes("daytimerecordingAttendance,$new$") &&
+      !taskFieldKeys.has(name),
   );
   const body = new URLSearchParams([...filteredFields, ...taskFields]);
 
@@ -634,33 +647,174 @@ export async function bookEffort(params: {
   const { fields: taskFields } = await expandTreeNode(params.projectOid);
   const taskMap = toFormMap(taskFields);
 
-  // Verify task exists in expanded tree
   const taskLineOid = params.taskLineOid;
   const taskTypeKey = `${PSP_PREFIX},recordType,listeditoid_${taskLineOid}.recordType`;
-  if (!taskMap.has(taskTypeKey)) {
-    const available = parseExpandedTasks(taskFields)
-      .map((t) => t.lineOid)
-      .join(", ");
-    throw new Error(
-      `Task ${taskLineOid} not found in project ${params.projectOid}. Available: ${available}`,
+  const taskFoundInExpand = taskMap.has(taskTypeKey);
+
+  // If task OID not directly in expand, verify it via effortTargetOid on an effort entry
+  if (!taskFoundInExpand) {
+    const hasEffortForTask = [...taskMap.entries()].some(
+      ([key, value]) =>
+        key.endsWith(".effortTargetOid") && value === taskLineOid,
     );
+    if (!hasEffortForTask) {
+      const available = parseExpandedTasks(taskFields)
+        .map((t) => `${t.lineOid} (target: ${t.recordOid})`)
+        .join(", ");
+      throw new Error(
+        `Task ${taskLineOid} not found in project ${params.projectOid}. Available: ${available}`,
+      );
+    }
   }
 
   // Step 4: Merge page fields + expanded task fields, set values.
-  // Filter out $new$ attendance rows to avoid creating unintended attendance entries.
+  // Filter out $new$ attendance rows to avoid unintended entries.
+  // Also filter out any page fields that overlap with expanded task fields —
+  // BCS remembers tree expansion server-side, so page HTML may already contain
+  // the task fields that expandTreeNode also returns. Duplicates confuse BCS.
+  const taskFieldKeys = new Set(taskFields.map(([name]) => name));
   const filteredFields = formFields.filter(
-    ([name]) => !name.includes("daytimerecordingAttendance,$new$"),
+    ([name]) =>
+      !name.includes("daytimerecordingAttendance,$new$") &&
+      !taskFieldKeys.has(name),
   );
   const body = new URLSearchParams([...filteredFields, ...taskFields]);
 
-  const hourKey = `${PSP_PREFIX},effortExpense,listeditoid_${taskLineOid}.effortExpense_hour`;
-  const minuteKey = `${PSP_PREFIX},effortExpense,listeditoid_${taskLineOid}.effortExpense_minute`;
-  body.set(hourKey, String(params.hours));
-  body.set(minuteKey, String(params.minutes));
+  const taskRecordType = taskFoundInExpand
+    ? taskMap.get(taskTypeKey)
+    : undefined;
+  if (taskFoundInExpand && taskRecordType === "neweffort") {
+    // Path A: Empty task (no existing effort) — set values directly on the row.
+    // This matches browser behavior: fill in the neweffort row and submit.
+    const lid = `listeditoid_${taskLineOid}`;
+    body.set(
+      `${PSP_PREFIX},effortExpense,${lid}.effortExpense_hour`,
+      String(params.hours),
+    );
+    body.set(
+      `${PSP_PREFIX},effortExpense,${lid}.effortExpense_minute`,
+      String(params.minutes),
+    );
+    body.set(
+      `${PSP_PREFIX},description,${lid}.description`,
+      params.description,
+    );
+  } else {
+    // Path B: Existing effort — create $new$ row alongside it.
+    // parentOid = effort OID (for _helper key).
+    // actualTaskOid = task OID (for effortTargetOid on the $new$ row).
+    let parentOid: string;
+    let actualTaskOid: string;
 
-  const descKey = `${PSP_PREFIX},description,listeditoid_${taskLineOid}.description`;
-  if (taskMap.has(descKey)) {
-    body.set(descKey, params.description);
+    if (taskFoundInExpand) {
+      // taskLineOid is an effort OID (recordType=effort)
+      parentOid = taskLineOid;
+      actualTaskOid =
+        taskMap.get(
+          `${PSP_PREFIX},effortTargetOid,listeditoid_${taskLineOid}.effortTargetOid`,
+        ) ?? taskLineOid;
+    } else {
+      // taskLineOid is a task OID — find the effort entry via effortTargetOid
+      const effortEntry = parseExpandedTasks(taskFields).find(
+        (t) =>
+          taskMap.get(
+            `${PSP_PREFIX},effortTargetOid,listeditoid_${t.lineOid}.effortTargetOid`,
+          ) === taskLineOid,
+      );
+      if (!effortEntry) {
+        throw new Error(`No effort entry found targeting task ${taskLineOid}`);
+      }
+      parentOid = effortEntry.lineOid;
+      actualTaskOid = taskLineOid;
+    }
+
+    const newOid = `$new$${Date.now()}_JTask`;
+    const newLid = `listeditoid_${newOid}`;
+    const [y, m, d] = params.date.split("-");
+    const bcsDate = `${d}.${m}.${y}`;
+    const col = (column: string, field: string) =>
+      `${PSP_PREFIX},${column},${newLid}.${field}`;
+
+    // _helper: append as SECOND entry under the effort OID key.
+    // BCS needs both: original _helper (for existing effort) + this one (for $new$).
+    const helperKey = `daytimerecording,Content,daytimerecordingPspTree,${parentOid}_helper`;
+    const helperPrefix = `daytimerecording,Content,daytimerecordingPspTree`;
+
+    const existingHelper = taskMap.get(helperKey);
+    let lastUpdate: number = Date.now();
+    let subtyp = "Personal";
+    if (existingHelper) {
+      try {
+        const parsed = JSON.parse(existingHelper) as Record<string, unknown>;
+        const luKey = `${helperPrefix},${parentOid}_lastUpdate`;
+        if (typeof parsed[luKey] === "number") lastUpdate = parsed[luKey];
+        const stKey = `${helperPrefix},${parentOid}_subtyp`;
+        if (typeof parsed[stKey] === "string") subtyp = parsed[stKey];
+      } catch {
+        // ignore parse errors, use defaults
+      }
+    }
+
+    const helperValue = JSON.stringify({
+      [`${helperPrefix},Columns,effortEnd,${newLid}.effortEnd.islisteditable`]:
+        "y",
+      [`${helperPrefix},Columns,[plusminus],duplicateEffortRow,${newLid}.duplicateEffortRow.islisteditable`]:
+        "y",
+      [`${helperPrefix},Columns,[plusminus],[plusminus].islisteditable`]: "y",
+      [`${helperPrefix},${parentOid}_lastUpdate`]: lastUpdate,
+      [`${helperPrefix},${parentOid}_subtyp`]: subtyp,
+      [`${helperPrefix},Columns,effortStart,${newLid}.effortStart.islisteditable`]:
+        "y",
+      [`${helperPrefix},Columns,description,${newLid}.description.islisteditable`]:
+        "y",
+      [`${helperPrefix},Columns,effortChargeability,${newLid}.effortChargeability.islisteditable`]:
+        "y",
+      [`${helperPrefix},Columns,SELECTION,${newLid}.SELECTION.islisteditable`]:
+        "y",
+      [`${helperPrefix},Columns,effortExpense,${newLid}.effortExpense.islisteditable`]:
+        "y",
+    });
+
+    body.append(helperKey, helperValue);
+
+    body.append(col("recordOid", "recordOid"), "");
+    body.append(col("recordType", "recordType"), "unsavedeffort");
+    body.append(col("recordDate", "recordDate"), bcsDate);
+    body.append(col("recordUserOid", "recordUserOid"), config.BCS_USER_OID);
+    body.append(col("effortTargetOid", "effortTargetOid"), actualTaskOid);
+    body.append(
+      col("effortUserGroupReference", "effortUserGroupReference"),
+      "",
+    );
+    body.append(
+      col("indicatorSumDedicatedExpense", "indicatorSumDedicatedExpense"),
+      "0",
+    );
+    body.append(
+      col("indicatorSumForecastExpense", "indicatorSumForecastExpense"),
+      "",
+    );
+    body.append(col("effortStart", "effortStart_hour"), "");
+    body.append(col("effortStart", "effortStart_minute"), "");
+    body.append(col("effortEnd", "effortEnd_hour"), "");
+    body.append(col("effortEnd", "effortEnd_minute"), "");
+    body.append(
+      col("effortExpense", "effortExpense_hour"),
+      String(params.hours),
+    );
+    body.append(
+      col("effortExpense", "effortExpense_minute"),
+      String(params.minutes),
+    );
+    body.append(col("description", "description"), params.description);
+    body.append(
+      `${PSP_PREFIX},[plusminus],${newLid}.[plusminus].editable_children`,
+      "duplicateEffortRow",
+    );
+    body.append(
+      col("effortChargeability", "effortChargeability"),
+      "effortIsChargable_true+effortIsShown_true",
+    );
   }
 
   // Step 5: Submission flags

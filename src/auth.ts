@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { readFile, writeFile, unlink } from "node:fs/promises";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const SESSION_FILE = resolve(process.cwd(), ".bcs-session");
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SESSION_FILE = resolve(__dirname, "..", ".bcs-session");
 const SESSION_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
 
 const envSchema = z.object({

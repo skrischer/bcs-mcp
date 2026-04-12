@@ -16,6 +16,7 @@ import type {
   TaskDetail,
   AttendanceEntry,
 } from "./api.js";
+import { log } from "./server.js";
 
 function formatAttendance(entries: AttendanceEntry[]): string {
   if (entries.length === 0) return "No attendance entries.";
@@ -98,8 +99,11 @@ export function registerTools(server: McpServer): void {
         ),
     },
     async ({ date }) => {
+      log("tool:call", "bcs_get_week_summary", { date });
       const week = await getWeekSummary(date);
-      return { content: [{ type: "text", text: formatWeekSummary(week) }] };
+      const text = formatWeekSummary(week);
+      log("tool:result", "bcs_get_week_summary", text);
+      return { content: [{ type: "text", text }] };
     },
   );
 
@@ -108,8 +112,11 @@ export function registerTools(server: McpServer): void {
     "Get day overview: attendance times, projects with booked hours, and unbooked remainder. Use this first to see the current state.",
     { date: z.string().describe("Date in YYYY-MM-DD format") },
     async ({ date }) => {
+      log("tool:call", "bcs_get_day_summary", { date });
       const summary = await getDaySummary(date);
-      return { content: [{ type: "text", text: formatDaySummary(summary) }] };
+      const text = formatDaySummary(summary);
+      log("tool:result", "bcs_get_day_summary", text);
+      return { content: [{ type: "text", text }] };
     },
   );
 
@@ -121,8 +128,11 @@ export function registerTools(server: McpServer): void {
       projectOid: z.string().describe("Project OID from bcs_get_day_summary"),
     },
     async ({ date, projectOid }) => {
+      log("tool:call", "bcs_get_tasks", { date, projectOid });
       const tasks = await getTasksForProject(date, projectOid);
-      return { content: [{ type: "text", text: formatTasks(tasks) }] };
+      const text = formatTasks(tasks);
+      log("tool:result", "bcs_get_tasks", text);
+      return { content: [{ type: "text", text }] };
     },
   );
 
@@ -144,7 +154,7 @@ export function registerTools(server: McpServer): void {
       description: z.string().describe("Description of work done"),
     },
     async ({ date, projectOid, taskLineOid, hours, minutes, description }) => {
-      const result = await bookEffort({
+      log("tool:call", "bcs_book_effort", {
         date,
         projectOid,
         taskLineOid,
@@ -152,17 +162,26 @@ export function registerTools(server: McpServer): void {
         minutes,
         description,
       });
-      const status = result.success
-        ? "Booking confirmed"
-        : "Booking submitted (verify manually)";
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${status}: ${hours}h ${minutes}m on ${date}\n\nProjects:\n${formatProjects(result.projects)}`,
-          },
-        ],
-      };
+      try {
+        const result = await bookEffort({
+          date,
+          projectOid,
+          taskLineOid,
+          hours,
+          minutes,
+          description,
+        });
+        const status = result.success
+          ? "Booking confirmed"
+          : "Booking submitted (verify manually)";
+        const text = `${status}: ${hours}h ${minutes}m on ${date}\n\nProjects:\n${formatProjects(result.projects)}`;
+        log("tool:result", "bcs_book_effort", text);
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log("tool:error", "bcs_book_effort", msg);
+        throw err;
+      }
     },
   );
 
@@ -175,18 +194,20 @@ export function registerTools(server: McpServer): void {
       taskLineOid: z.string().describe("Task lineOid of the effort to delete"),
     },
     async ({ date, projectOid, taskLineOid }) => {
-      const result = await deleteEffort({ date, projectOid, taskLineOid });
-      const status = result.success
-        ? "Effort deleted"
-        : "Delete submitted (verify manually)";
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${status}\n\nProjects:\n${formatProjects(result.projects)}`,
-          },
-        ],
-      };
+      log("tool:call", "bcs_delete_effort", { date, projectOid, taskLineOid });
+      try {
+        const result = await deleteEffort({ date, projectOid, taskLineOid });
+        const status = result.success
+          ? "Effort deleted"
+          : "Delete submitted (verify manually)";
+        const text = `${status}\n\nProjects:\n${formatProjects(result.projects)}`;
+        log("tool:result", "bcs_delete_effort", text);
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log("tool:error", "bcs_delete_effort", msg);
+        throw err;
+      }
     },
   );
 
@@ -234,7 +255,7 @@ export function registerTools(server: McpServer): void {
       pauseHour,
       pauseMinute,
     }) => {
-      const result = await setAttendance({
+      log("tool:call", "bcs_set_attendance", {
         date,
         startHour,
         startMinute,
@@ -243,10 +264,26 @@ export function registerTools(server: McpServer): void {
         pauseHour,
         pauseMinute,
       });
-      const status = result.success
-        ? `Attendance set: ${startHour}:${String(startMinute).padStart(2, "0")} - ${endHour}:${String(endMinute).padStart(2, "0")}`
-        : "Failed to set attendance";
-      return { content: [{ type: "text", text: status }] };
+      try {
+        const result = await setAttendance({
+          date,
+          startHour,
+          startMinute,
+          endHour,
+          endMinute,
+          pauseHour,
+          pauseMinute,
+        });
+        const status = result.success
+          ? `Attendance set: ${startHour}:${String(startMinute).padStart(2, "0")} - ${endHour}:${String(endMinute).padStart(2, "0")}`
+          : "Failed to set attendance";
+        log("tool:result", "bcs_set_attendance", status);
+        return { content: [{ type: "text", text: status }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log("tool:error", "bcs_set_attendance", msg);
+        throw err;
+      }
     },
   );
 }
