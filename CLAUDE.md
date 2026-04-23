@@ -15,13 +15,15 @@ pnpm start        # Start HTTP server (default port 3000)
 
 ```
 src/index.ts   — HTTP server entry point
-src/server.ts  — MCP session management, request routing, logging
+src/server.ts  — MCP session management, request routing
+src/logger.ts  — Console + file logging (bcs-mcp.log, truncated per start)
 src/tools.ts   — MCP tool definitions (6 tools)
 src/api.ts     — BCS form-based API (HTML GET/POST, form state parsing)
 src/auth.ts    — BCS authentication (login, CSRF, session persistence)
 ```
 
 Flow: `index.ts` -> `server.ts` -> `tools.ts` -> `api.ts` -> `auth.ts` -> BCS
+Logging: `logger.ts` imported by all modules. File log at `bcs-mcp.log` (project root), truncated on each server start.
 
 ## BCS Integration
 

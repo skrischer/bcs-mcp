@@ -1,5 +1,6 @@
 import { parse as parseHtml } from "node-html-parser";
 import { authenticatedFetch, getConfig } from "./auth.js";
+import { log } from "./logger.js";
 
 const PAGE_PATH = "/bcs/mybcs/dayeffortrecording/display";
 const PSP_PREFIX = "daytimerecording,Content,daytimerecordingPspTree,Columns";
@@ -76,6 +77,27 @@ function generateTransactionId(): string {
   return `${Date.now()}-${hex}`;
 }
 
+function validateDayPageHtml(html: string, date: string): void {
+  if (html.includes('name="pwd"') && html.includes('name="user"')) {
+    log("api:validate", "FAIL: received login page instead of day recording", {
+      date,
+    });
+    throw new Error(
+      "Session expired: received login page instead of day recording page",
+    );
+  }
+  if (!html.includes("daytimerecording")) {
+    log("api:validate", "FAIL: missing daytimerecording form structure", {
+      date,
+      htmlLength: html.length,
+      htmlSnippet: html.slice(0, 200),
+    });
+    throw new Error(
+      "Invalid page: missing daytimerecording form structure. Check BCS_USER_OID.",
+    );
+  }
+}
+
 export async function fetchDayPage(date: string): Promise<string> {
   const config = getConfig();
   const dateParams = buildDateParams(date);
@@ -85,14 +107,22 @@ export async function fetchDayPage(date: string): Promise<string> {
     transactionId: generateTransactionId(),
   });
 
+  log("api:fetch", "Fetching day page", { date, userOid: config.BCS_USER_OID });
   const url = `${config.BCS_URL}${PAGE_PATH}?${params.toString()}`;
   const response = await authenticatedFetch(url);
 
   if (!response.ok) {
+    log("api:fetch", "Day page fetch failed", {
+      date,
+      status: response.status,
+    });
     throw new Error(`Failed to fetch day page: ${response.status}`);
   }
 
-  return response.text();
+  const html = await response.text();
+  log("api:fetch", "Day page received", { date, htmlLength: html.length });
+  validateDayPageHtml(html, date);
+  return html;
 }
 
 export function parseFormState(html: string): [string, string][] {
@@ -297,6 +327,14 @@ export async function getDaySummary(date: string): Promise<DaySummary> {
   const attendance = parseAttendance(html);
   const names = parsePspTreeNames(html);
   const projects = parseProjectAggregates(html, names);
+
+  log("api:parse", "getDaySummary", {
+    date,
+    attendanceEntries: attendance.length,
+    projects: projects.length,
+    projectNames: projects.map((p) => p.name),
+    formFields: parseFormState(html).length,
+  });
 
   let bookedTotal = 0;
   for (const p of projects) {

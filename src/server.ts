@@ -3,6 +3,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerTools } from "./tools.js";
+import { log } from "./logger.js";
+
+export { log };
 
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
@@ -15,13 +18,6 @@ function createSessionServer(): McpServer {
   registerTools(server);
   return server;
 }
-
-function log(tag: string, ...args: unknown[]): void {
-  const ts = new Date().toISOString().slice(11, 23);
-  console.error(`[${ts}] [${tag}]`, ...args);
-}
-
-export { log };
 
 async function handleMcp(
   req: IncomingMessage,

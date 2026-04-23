@@ -2,6 +2,7 @@ import { z } from "zod";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { log } from "./logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SESSION_FILE = resolve(__dirname, "..", ".bcs-session");
@@ -74,7 +75,11 @@ interface LoginResult {
 }
 
 export async function login(config: BcsConfig): Promise<LoginResult> {
-  // Step 1: GET login page for initial JSESSIONID + pagetimestamp
+  log("auth", "Login attempt", {
+    user: config.BCS_USERNAME,
+    url: config.BCS_URL,
+  });
+
   const preRes = await fetch(`${config.BCS_URL}/bcs/login`, {
     redirect: "manual",
   });
@@ -82,6 +87,7 @@ export async function login(config: BcsConfig): Promise<LoginResult> {
   const preSessionMatch = preCookies.join(";").match(/JSESSIONID=([^;]+)/);
   const initialSessionId = preSessionMatch?.[1];
   if (!initialSessionId) {
+    log("auth", "Login failed: no initial JSESSIONID");
     throw new Error("Login failed: no initial JSESSIONID from login page");
   }
 
@@ -91,7 +97,6 @@ export async function login(config: BcsConfig): Promise<LoginResult> {
   );
   const pagetimestamp = timestampMatch?.[1] ?? "";
 
-  // Step 2: POST login with correct field names
   const body = new URLSearchParams({
     user: config.BCS_USERNAME,
     pwd: config.BCS_PASSWORD,
@@ -113,26 +118,26 @@ export async function login(config: BcsConfig): Promise<LoginResult> {
   const setCookies = response.headers.getSetCookie();
   const cookieStr = setCookies.join(";");
 
-  // Extract JSESSIONID (new or keep initial)
   const newSessionMatch = cookieStr.match(/JSESSIONID=([^;]+)/);
   const sessionId = newSessionMatch?.[1] ?? initialSessionId;
 
-  // Extract CSRF_Token cookie (set by BCS on successful login)
   const csrfMatch = cookieStr.match(/CSRF_Token=([^;]+)/);
   if (!csrfMatch?.[1]) {
+    log("auth", "Login failed: no CSRF_Token cookie");
     throw new Error(
       "Login failed: no CSRF_Token cookie (invalid credentials?)",
     );
   }
 
-  // Verify login succeeded: 302 redirect to non-login page
   if (response.status === 302) {
     const location = response.headers.get("location") ?? "";
     if (location.includes("/login")) {
+      log("auth", "Login failed: redirected back to login page");
       throw new Error("Login failed: redirected back to login page");
     }
   }
 
+  log("auth", "Login successful", { sessionId: sessionId.slice(0, 8) + "..." });
   return { sessionId, csrfToken: csrfMatch[1] };
 }
 
@@ -141,15 +146,24 @@ export async function getSession(): Promise<SessionData> {
     cachedSession &&
     Date.now() - cachedSession.timestamp < SESSION_MAX_AGE_MS
   ) {
+    log("auth", "Session cache hit", {
+      sessionId: cachedSession.sessionId.slice(0, 8) + "...",
+      ageMinutes: Math.round((Date.now() - cachedSession.timestamp) / 60000),
+    });
     return cachedSession;
   }
 
   const persisted = await loadSession();
   if (persisted) {
+    log("auth", "Session restored from file", {
+      sessionId: persisted.sessionId.slice(0, 8) + "...",
+      ageMinutes: Math.round((Date.now() - persisted.timestamp) / 60000),
+    });
     cachedSession = persisted;
     return persisted;
   }
 
+  log("auth", "No valid session found, logging in");
   const config = getConfig();
   const { sessionId, csrfToken } = await login(config);
   const session: SessionData = { sessionId, csrfToken, timestamp: Date.now() };
@@ -181,11 +195,34 @@ export async function authenticatedFetch(
   };
 
   const response = await makeRequest(session);
+  log("auth:fetch", `${options.method ?? "GET"} ${response.status}`, {
+    url: url.replace(/\?.*/, "?..."),
+    redirected: response.redirected,
+    finalUrl: response.url.replace(/\?.*/, "?..."),
+  });
 
-  if (response.status === 401 || response.status === 403) {
+  if (
+    response.status === 401 ||
+    response.status === 403 ||
+    response.url.includes("/login")
+  ) {
+    log(
+      "auth:fetch",
+      "Session invalid (status or login redirect), re-authenticating",
+    );
     await invalidateSession();
     const newSession = await getSession();
-    return makeRequest(newSession);
+    const retryResponse = await makeRequest(newSession);
+    log("auth:fetch", `Retry ${retryResponse.status}`, {
+      redirected: retryResponse.redirected,
+      finalUrl: retryResponse.url.replace(/\?.*/, "?..."),
+    });
+    if (retryResponse.url.includes("/login")) {
+      throw new Error(
+        "Authentication failed: redirected to login after re-authentication",
+      );
+    }
+    return retryResponse;
   }
 
   return response;

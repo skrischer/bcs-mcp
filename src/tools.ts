@@ -16,7 +16,7 @@ import type {
   TaskDetail,
   AttendanceEntry,
 } from "./api.js";
-import { log } from "./server.js";
+import { log } from "./logger.js";
 
 function formatAttendance(entries: AttendanceEntry[]): string {
   if (entries.length === 0) return "No attendance entries.";
