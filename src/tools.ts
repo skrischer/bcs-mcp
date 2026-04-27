@@ -8,83 +8,12 @@ import {
   deleteEffort,
   setAttendance,
 } from "./api.js";
-import type {
-  DaySummary,
-  WeekSummary,
-  DaySummaryWithDate,
-  ProjectAggregate,
-  TaskDetail,
-  AttendanceEntry,
-} from "./api.js";
 import { log } from "./logger.js";
 
-function formatAttendance(entries: AttendanceEntry[]): string {
-  if (entries.length === 0) return "No attendance entries.";
-  return entries
-    .map((a) => {
-      const start = `${a.startHour}:${String(a.startMinute).padStart(2, "0")}`;
-      const end = `${a.endHour}:${String(a.endMinute).padStart(2, "0")}`;
-      const dur = `${a.durationHour}:${String(a.durationMinute).padStart(2, "0")}`;
-      const type = a.recordType === "unsavedPause" ? "Pause" : "Attendance";
-      return `- ${start} - ${end} (${dur}h) [${type}]`;
-    })
-    .join("\n");
-}
-
-function formatProjects(projects: ProjectAggregate[]): string {
-  if (projects.length === 0) return "No projects found.";
-  return projects
-    .map((p) => `- ${p.name} (${p.projectOid}): ${p.hours}h ${p.minutes}m`)
-    .join("\n");
-}
-
-function formatDaySummary(summary: DaySummary): string {
-  return [
-    "Attendance:",
-    formatAttendance(summary.attendance),
-    "",
-    "Projects:",
-    formatProjects(summary.projects),
-    "",
-    `Booked: ${summary.bookedHours}h ${summary.bookedMinutes}m`,
-    `Unbooked: ${summary.unbookedHours}h ${summary.unbookedMinutes}m`,
-  ].join("\n");
-}
-
-const WEEKDAY_NAMES = ["Mo", "Di", "Mi", "Do", "Fr"];
-
-function formatDayLine(entry: DaySummaryWithDate, index: number): string {
-  const day = WEEKDAY_NAMES[index] ?? entry.date;
-  const booked = `${entry.summary.bookedHours}h ${entry.summary.bookedMinutes}m`;
-  const unbooked =
-    entry.summary.unbookedHours + entry.summary.unbookedMinutes > 0
-      ? ` (unbooked: ${entry.summary.unbookedHours}h ${entry.summary.unbookedMinutes}m)`
-      : "";
-  const projects = entry.summary.projects
-    .filter((p) => p.hours > 0 || p.minutes > 0)
-    .map((p) => `${p.name}: ${p.hours}h ${p.minutes}m`)
-    .join(", ");
-  return `${day} ${entry.date}: ${booked}${unbooked}${projects ? ` [${projects}]` : ""}`;
-}
-
-function formatWeekSummary(week: WeekSummary): string {
-  const dayLines = week.days.map((d, i) => formatDayLine(d, i));
-  return [
-    ...dayLines,
-    "",
-    `Week total booked: ${week.totalBookedHours}h ${week.totalBookedMinutes}m`,
-    `Week total unbooked: ${week.totalUnbookedHours}h ${week.totalUnbookedMinutes}m`,
-  ].join("\n");
-}
-
-function formatTasks(tasks: TaskDetail[]): string {
-  if (tasks.length === 0) return "No tasks found for this project.";
-  return tasks
-    .map(
-      (t) =>
-        `- ${t.name} [${t.lineOid}] (${t.recordType}): ${t.hours}h ${t.minutes}m${t.description ? ` — ${t.description}` : ""}`,
-    )
-    .join("\n");
+function jsonResponse(data: unknown): {
+  content: [{ type: "text"; text: string }];
+} {
+  return { content: [{ type: "text", text: JSON.stringify(data) }] };
 }
 
 export function registerTools(server: McpServer): void {
@@ -101,9 +30,8 @@ export function registerTools(server: McpServer): void {
     async ({ date }) => {
       log("tool:call", "bcs_get_week_summary", { date });
       const week = await getWeekSummary(date);
-      const text = formatWeekSummary(week);
-      log("tool:result", "bcs_get_week_summary", text);
-      return { content: [{ type: "text", text }] };
+      log("tool:result", "bcs_get_week_summary", week);
+      return jsonResponse(week);
     },
   );
 
@@ -114,9 +42,8 @@ export function registerTools(server: McpServer): void {
     async ({ date }) => {
       log("tool:call", "bcs_get_day_summary", { date });
       const summary = await getDaySummary(date);
-      const text = formatDaySummary(summary);
-      log("tool:result", "bcs_get_day_summary", text);
-      return { content: [{ type: "text", text }] };
+      log("tool:result", "bcs_get_day_summary", summary);
+      return jsonResponse(summary);
     },
   );
 
@@ -130,9 +57,8 @@ export function registerTools(server: McpServer): void {
     async ({ date, projectOid }) => {
       log("tool:call", "bcs_get_tasks", { date, projectOid });
       const tasks = await getTasksForProject(date, projectOid);
-      const text = formatTasks(tasks);
-      log("tool:result", "bcs_get_tasks", text);
-      return { content: [{ type: "text", text }] };
+      log("tool:result", "bcs_get_tasks", tasks);
+      return jsonResponse(tasks);
     },
   );
 
@@ -171,12 +97,8 @@ export function registerTools(server: McpServer): void {
           minutes,
           description,
         });
-        const status = result.success
-          ? "Booking confirmed"
-          : "Booking submitted (verify manually)";
-        const text = `${status}: ${hours}h ${minutes}m on ${date}\n\nProjects:\n${formatProjects(result.projects)}`;
-        log("tool:result", "bcs_book_effort", text);
-        return { content: [{ type: "text", text }] };
+        log("tool:result", "bcs_book_effort", result);
+        return jsonResponse(result);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log("tool:error", "bcs_book_effort", msg);
@@ -197,12 +119,8 @@ export function registerTools(server: McpServer): void {
       log("tool:call", "bcs_delete_effort", { date, projectOid, taskLineOid });
       try {
         const result = await deleteEffort({ date, projectOid, taskLineOid });
-        const status = result.success
-          ? "Effort deleted"
-          : "Delete submitted (verify manually)";
-        const text = `${status}\n\nProjects:\n${formatProjects(result.projects)}`;
-        log("tool:result", "bcs_delete_effort", text);
-        return { content: [{ type: "text", text }] };
+        log("tool:result", "bcs_delete_effort", result);
+        return jsonResponse(result);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log("tool:error", "bcs_delete_effort", msg);
@@ -274,11 +192,8 @@ export function registerTools(server: McpServer): void {
           pauseHour,
           pauseMinute,
         });
-        const status = result.success
-          ? `Attendance set: ${startHour}:${String(startMinute).padStart(2, "0")} - ${endHour}:${String(endMinute).padStart(2, "0")}`
-          : "Failed to set attendance";
-        log("tool:result", "bcs_set_attendance", status);
-        return { content: [{ type: "text", text: status }] };
+        log("tool:result", "bcs_set_attendance", result);
+        return jsonResponse(result);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log("tool:error", "bcs_set_attendance", msg);

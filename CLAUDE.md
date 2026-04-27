@@ -9,12 +9,13 @@ pnpm build        # Build to dist/
 pnpm dev          # Build with watch mode
 pnpm test         # Run tests
 pnpm start        # Start HTTP server (default port 3000)
+pnpm start:stdio  # Start in stdio mode (for Claude Desktop)
 ```
 
 ## Architecture
 
 ```
-src/index.ts   — HTTP server entry point
+src/index.ts   — Entry point (--stdio for stdio transport, default: HTTP)
 src/server.ts  — MCP session management, request routing
 src/logger.ts  — Console + file logging (bcs-mcp.log, truncated per start)
 src/tools.ts   — MCP tool definitions (6 tools)

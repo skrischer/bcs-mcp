@@ -13,7 +13,7 @@ export function getTransports(): Map<string, StreamableHTTPServerTransport> {
   return transports;
 }
 
-function createSessionServer(): McpServer {
+export function createSessionServer(): McpServer {
   const server = new McpServer({ name: "bcs-mcp", version: "1.0.0" });
   registerTools(server);
   return server;

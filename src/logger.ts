@@ -6,6 +6,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const LOG_FILE = resolve(__dirname, "..", "bcs-mcp.log");
 
 let logStream: WriteStream | null = null;
+let stdioMode = false;
+
+export function setStdioMode(): void {
+  stdioMode = true;
+}
 
 export function initLogFile(): void {
   logStream = createWriteStream(LOG_FILE, { flags: "w" });
@@ -18,7 +23,9 @@ export function closeLogFile(): void {
 
 export function log(tag: string, ...args: unknown[]): void {
   const ts = new Date().toISOString().slice(11, 23);
-  console.error(`[${ts}] [${tag}]`, ...args);
+  if (!stdioMode) {
+    console.error(`[${ts}] [${tag}]`, ...args);
+  }
 
   if (logStream) {
     const fullTs = new Date().toISOString();

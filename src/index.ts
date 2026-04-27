@@ -1,32 +1,59 @@
 import "dotenv/config";
-import { createServer } from "node:http";
-import { createMcpHandler, getTransports } from "./server.js";
-import { initLogFile, closeLogFile, log } from "./logger.js";
+import { initLogFile, closeLogFile, log, setStdioMode } from "./logger.js";
 
-initLogFile();
+const useStdio = process.argv.includes("--stdio");
 
-const handler = createMcpHandler();
-const port = parseInt(process.env.PORT ?? "3000", 10);
+if (useStdio) {
+  const { StdioServerTransport } =
+    await import("@modelcontextprotocol/sdk/server/stdio.js");
+  const { createSessionServer } = await import("./server.js");
 
-const httpServer = createServer(async (req, res) => {
-  await handler(req, res);
-});
+  setStdioMode();
+  initLogFile();
 
-httpServer.listen(port, () => {
-  log("server", `Listening on http://localhost:${port}`);
-});
+  const server = createSessionServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  log("server", "stdio transport connected");
 
-function shutdown(): void {
-  log("server", "Shutting down...");
-  const transports = getTransports();
-  for (const [sid, transport] of transports) {
+  function shutdown(): void {
+    log("server", "Shutting down...");
     transport.close().catch(() => {});
-    transports.delete(sid);
+    closeLogFile();
+    process.exit(0);
   }
-  closeLogFile();
-  httpServer.close();
-  process.exit(0);
-}
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+} else {
+  const { createServer } = await import("node:http");
+  const { createMcpHandler, getTransports } = await import("./server.js");
+
+  initLogFile();
+
+  const handler = createMcpHandler();
+  const port = parseInt(process.env.PORT ?? "3000", 10);
+
+  const httpServer = createServer(async (req, res) => {
+    await handler(req, res);
+  });
+
+  httpServer.listen(port, () => {
+    log("server", `Listening on http://localhost:${port}`);
+  });
+
+  function shutdown(): void {
+    log("server", "Shutting down...");
+    const transports = getTransports();
+    for (const [sid, transport] of transports) {
+      transport.close().catch(() => {});
+      transports.delete(sid);
+    }
+    closeLogFile();
+    httpServer.close();
+    process.exit(0);
+  }
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}

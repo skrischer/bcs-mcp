@@ -44,7 +44,8 @@ To find your `BCS_USER_OID`: open BCS, navigate to day effort recording, and loo
 
 ```bash
 pnpm build
-pnpm start        # starts HTTP server on PORT (default 3000)
+pnpm start         # starts HTTP server on PORT (default 3000)
+pnpm start:stdio   # starts in stdio mode (for Claude Desktop)
 ```
 
 For development:
@@ -56,7 +57,53 @@ pnpm test          # run tests
 
 ## Claude Desktop integration
 
-Add to your `claude_desktop_config.json`:
+### Stdio (recommended)
+
+Claude Desktop launches and manages the server process directly. Add to your `claude_desktop_config.json`:
+
+**Windows with WSL:**
+
+```json
+{
+  "mcpServers": {
+    "bcs": {
+      "command": "wsl.exe",
+      "args": ["bash", "-ic", "node /absolute/path/to/bcs-mcp/dist/index.js --stdio"],
+      "env": {
+        "BCS_URL": "https://your-bcs-instance.example.com",
+        "BCS_USERNAME": "your-username",
+        "BCS_PASSWORD": "your-password",
+        "BCS_USER_OID": "your-user-oid"
+      }
+    }
+  }
+}
+```
+
+**macOS / Linux:**
+
+```json
+{
+  "mcpServers": {
+    "bcs": {
+      "command": "node",
+      "args": ["/absolute/path/to/bcs-mcp/dist/index.js", "--stdio"],
+      "env": {
+        "BCS_URL": "https://your-bcs-instance.example.com",
+        "BCS_USERNAME": "your-username",
+        "BCS_PASSWORD": "your-password",
+        "BCS_USER_OID": "your-user-oid"
+      }
+    }
+  }
+}
+```
+
+Env vars in the config override `.env` file values. If a `.env` file exists, it is also loaded.
+
+### HTTP (for development / debugging)
+
+Start the server manually, then connect via URL:
 
 ```json
 {
@@ -84,7 +131,7 @@ Then ask Claude something like:
 ## Architecture
 
 ```
-src/index.ts   — HTTP server entry point
+src/index.ts   — Entry point (--stdio for stdio transport, default: HTTP)
 src/server.ts  — MCP session management and request routing
 src/tools.ts   — MCP tool definitions (input schemas, response formatting)
 src/api.ts     — BCS form-based API (HTML parsing, form submission)
