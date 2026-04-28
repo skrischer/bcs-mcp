@@ -20,7 +20,7 @@ src/server.ts  — MCP session management, request routing
 src/logger.ts  — Console + file logging (bcs-mcp.log, truncated per start)
 src/tools.ts   — MCP tool definitions (6 tools)
 src/api.ts     — BCS form-based API (HTML GET/POST, form state parsing)
-src/auth.ts    — BCS authentication (login, CSRF, session persistence)
+src/auth.ts    — BCS authentication (login, CSRF, TOTP 2FA, session persistence)
 ```
 
 Flow: `index.ts` -> `server.ts` -> `tools.ts` -> `api.ts` -> `auth.ts` -> BCS
@@ -35,6 +35,15 @@ BCS uses **form-based server-side rendering**, not a REST API.
 `POST /bcs/login` with fields `user`, `pwd`, `isPassword=pwd`, `login=Anmelden`. Requires pre-fetching the login page for initial JSESSIONID + pagetimestamp. Returns `JSESSIONID` + `CSRF_Token` cookies. Sessions cached in `.bcs-session` file (30 min TTL).
 
 **2FA (TOTP):** When 2FA is enabled, BCS redirects all requests to `/bcs/totpVerification` after the password POST. `login()` probes with `GET /bcs` after the password step; on redirect to `/bcs/totpVerification`, it fetches the challenge page, parses the OTP input field (`totpVerificationCode`), generates a 6-digit code from `BCS_TOTP_SECRET` (Base32) via `otpauth`, and POSTs it with hidden fields (`pagetimestamp`, `!totpTrustBrowser`, `login=true`). If 2FA is required but `BCS_TOTP_SECRET` is not configured, login throws.
+
+### Login flow
+
+1. GET `/bcs/login` -> extract JSESSIONID + pagetimestamp
+2. POST `/bcs/login` with credentials -> extract JSESSIONID + CSRF_Token
+3. Redirect-to-login check (definite auth failure -> throw)
+4. Probe GET `/bcs` -> check if BCS redirects to `/bcs/totpVerification`
+5. **No 2FA**: validate CSRF_Token present, return session
+6. **2FA**: validate `BCS_TOTP_SECRET` set -> GET challenge page -> parse form -> generate TOTP -> POST code -> validate success
 
 ### Form field structure
 
@@ -85,6 +94,16 @@ Uses sequential requests per day (not `Promise.all()`) because BCS is stateful a
 - `_helper` JSON metadata fields must be appended (not set) for `$new$` rows — BCS expects duplicate keys.
 - Attendance recordTypes: `unsavedAttendance`/`distributed`/`undistributed` = working time, `unsavedPause` = pause.
 - Project/task names are extracted from `<a><span>` elements in PSP tree `<tr>` rows via `parsePspTreeNames()`.
+- CSRF_Token check must happen AFTER the 2FA probe, not before — BCS may not set it until TOTP verification completes.
+- `BCS_TOTP_SECRET` is optional. All auth code must handle both paths (with and without 2FA).
+
+## Testing
+
+- Test framework: vitest
+- `fetch` is mocked via `vi.stubGlobal("fetch", vi.fn<FetchFn>())` with chained `.mockResolvedValueOnce()` for sequential HTTP responses
+- Each mock response uses `new Response(body, { status, headers })` — headers as tuples for multiple Set-Cookie
+- Auth tests mock the full login flow: login page -> password POST -> probe -> (optional: TOTP challenge -> TOTP POST)
+- `BcsConfig` is constructed inline per test, not loaded from env
 
 ## Coding Conventions
 
