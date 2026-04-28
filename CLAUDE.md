@@ -34,6 +34,8 @@ BCS uses **form-based server-side rendering**, not a REST API.
 
 `POST /bcs/login` with fields `user`, `pwd`, `isPassword=pwd`, `login=Anmelden`. Requires pre-fetching the login page for initial JSESSIONID + pagetimestamp. Returns `JSESSIONID` + `CSRF_Token` cookies. Sessions cached in `.bcs-session` file (30 min TTL).
 
+**2FA (TOTP):** BCS sets `CSRF_Token` immediately after the password POST but, when 2FA is enabled, redirects every subsequent request to `/bcs/totpVerification` until the OTP code is submitted. `login()` therefore probes with a `GET /bcs` after the password step; if the response redirects to `/totpVerification`, it fetches that challenge page, parses the form (OTP field detected heuristically — for BCS this is `totpVerificationCode`), generates a 6-digit code from `BCS_TOTP_SECRET` (Base32) via `otpauth`, and POSTs it together with hidden fields (`pagetimestamp`, `!totpTrustBrowser`, `login=true`) to the form's action URL. If 2FA is required but `BCS_TOTP_SECRET` is unset, login throws a clear error. Use `node scripts/test-2fa-login.mjs` to verify end-to-end against the live server (it dumps the challenge HTML to `bcs-2fa-challenge.html` for debugging).
+
 ### Form field structure
 
 - PSP Tree: `daytimerecording,Content,daytimerecordingPspTree,Columns,{column},listeditoid_{OID}.{field}`

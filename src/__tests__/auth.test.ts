@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { TOTP, Secret } from "otpauth";
 import { login, getConfig } from "../auth.js";
 import type { BcsConfig } from "../auth.js";
 
@@ -13,6 +14,8 @@ const mockConfig: BcsConfig = {
   BCS_PASSWORD: "testpass",
   BCS_USER_OID: "OID123",
 };
+
+const TEST_TOTP_SECRET = "JBSWY3DPEHPK3PXP";
 
 function makeLoginPageResponse(): Response {
   const html = '<input name="pagetimestamp" type="hidden" value="123456">';
@@ -32,6 +35,48 @@ function makeLoginSuccessResponse(): Response {
       ["set-cookie", "CSRF_Token=csrftoken456; Path=/; SameSite=Lax"],
       ["location", "/bcs"],
     ],
+  });
+}
+
+function makeProbeNoTotpResponse(): Response {
+  return new Response("<html><body>BCS dashboard</body></html>", {
+    status: 200,
+  });
+}
+
+function makeProbeRedirectToTotp(): Response {
+  return new Response(null, {
+    status: 302,
+    headers: { location: "/bcs/totpVerification" },
+  });
+}
+
+function makeTotpChallengePageResponse(): Response {
+  const html = `
+    <html><body>
+      <form method="post" action="/bcs/totpVerification/*/display?is_Ajax_Login=false">
+        <input type="text" name="totpVerificationCode" autocomplete="off">
+        <input type="hidden" name="!totpTrustBrowser" value="true">
+        <input type="checkbox" name="totpTrustBrowser" value="true">
+        <button type="submit" name="login" value="true">Anmelden</button>
+      </form>
+      <input type="hidden" name="pagetimestamp" value="999888">
+    </body></html>
+  `;
+  return new Response(html, { status: 200 });
+}
+
+function makeTotpSuccessResponse(): Response {
+  return new Response(null, {
+    status: 302,
+    headers: { location: "/bcs" },
+  });
+}
+
+function makeTotpRejectedResponse(): Response {
+  return new Response(null, {
+    status: 302,
+    headers: { location: "/bcs/totpVerification" },
   });
 }
 
@@ -71,18 +116,19 @@ describe("auth", () => {
   });
 
   describe("login", () => {
-    it("extracts JSESSIONID and CSRF_Token from login response", async () => {
+    it("extracts JSESSIONID and CSRF_Token from login response (no 2FA)", async () => {
       const mockFetch = vi
         .fn<FetchFn>()
         .mockResolvedValueOnce(makeLoginPageResponse())
-        .mockResolvedValueOnce(makeLoginSuccessResponse());
+        .mockResolvedValueOnce(makeLoginSuccessResponse())
+        .mockResolvedValueOnce(makeProbeNoTotpResponse());
       vi.stubGlobal("fetch", mockFetch);
 
       const result = await login(mockConfig);
       expect(result.sessionId).toBe("abc123");
       expect(result.csrfToken).toBe("csrftoken456");
 
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
 
     it("throws when no initial JSESSIONID from login page", async () => {
@@ -133,6 +179,75 @@ describe("auth", () => {
       await expect(login(mockConfig)).rejects.toThrow(
         "redirected back to login",
       );
+    });
+
+    it("submits TOTP code when probe redirects to /totpVerification", async () => {
+      const mockFetch = vi
+        .fn<FetchFn>()
+        .mockResolvedValueOnce(makeLoginPageResponse())
+        .mockResolvedValueOnce(makeLoginSuccessResponse())
+        .mockResolvedValueOnce(makeProbeRedirectToTotp())
+        .mockResolvedValueOnce(makeTotpChallengePageResponse())
+        .mockResolvedValueOnce(makeTotpSuccessResponse());
+      vi.stubGlobal("fetch", mockFetch);
+
+      const result = await login({
+        ...mockConfig,
+        BCS_TOTP_SECRET: TEST_TOTP_SECRET,
+      });
+
+      expect(result.sessionId).toBe("abc123");
+      expect(result.csrfToken).toBe("csrftoken456");
+      expect(mockFetch).toHaveBeenCalledTimes(5);
+
+      const totpCall = mockFetch.mock.calls[4];
+      expect(totpCall).toBeDefined();
+      const totpUrl = totpCall![0] as string;
+      expect(totpUrl).toContain("/bcs/totpVerification/");
+
+      const totpInit = totpCall![1] as RequestInit;
+      const params = new URLSearchParams(totpInit.body as string);
+      const expectedCode = new TOTP({
+        secret: Secret.fromBase32(TEST_TOTP_SECRET),
+      }).generate();
+      expect(params.get("totpVerificationCode")).toBe(expectedCode);
+      expect(params.get("pagetimestamp")).toBe("999888");
+      expect(params.get("login")).toBe("true");
+
+      const cookieHeader = (totpInit.headers as Record<string, string>)[
+        "Cookie"
+      ];
+      expect(cookieHeader).toContain("JSESSIONID=abc123");
+      expect(cookieHeader).toContain("CSRF_Token=csrftoken456");
+    });
+
+    it("throws when 2FA is required but BCS_TOTP_SECRET is not set", async () => {
+      const mockFetch = vi
+        .fn<FetchFn>()
+        .mockResolvedValueOnce(makeLoginPageResponse())
+        .mockResolvedValueOnce(makeLoginSuccessResponse())
+        .mockResolvedValueOnce(makeProbeRedirectToTotp());
+      vi.stubGlobal("fetch", mockFetch);
+
+      await expect(login(mockConfig)).rejects.toThrow(
+        /BCS requires 2FA but BCS_TOTP_SECRET is not set/,
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("throws when BCS rejects the TOTP code", async () => {
+      const mockFetch = vi
+        .fn<FetchFn>()
+        .mockResolvedValueOnce(makeLoginPageResponse())
+        .mockResolvedValueOnce(makeLoginSuccessResponse())
+        .mockResolvedValueOnce(makeProbeRedirectToTotp())
+        .mockResolvedValueOnce(makeTotpChallengePageResponse())
+        .mockResolvedValueOnce(makeTotpRejectedResponse());
+      vi.stubGlobal("fetch", mockFetch);
+
+      await expect(
+        login({ ...mockConfig, BCS_TOTP_SECRET: TEST_TOTP_SECRET }),
+      ).rejects.toThrow("2FA code rejected by BCS");
     });
   });
 });

@@ -1,5 +1,8 @@
 node_modules
 dist
 .env
+.env.local
 .bcs-session
+bcs-mcp.log
+bcs-2fa-challenge.html
 *.tsbuildinfo
