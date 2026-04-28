@@ -36,9 +36,14 @@ BCS_USERNAME=your-username
 BCS_PASSWORD=your-password
 BCS_USER_OID=your-user-oid
 PORT=3000
+
+# Optional: only needed if 2FA (TOTP) is enabled on your BCS account
+BCS_TOTP_SECRET=your-base32-totp-secret
 ```
 
 To find your `BCS_USER_OID`: open BCS, navigate to day effort recording, and look for the `oid` query parameter in the URL.
+
+`BCS_TOTP_SECRET` is the Base32-encoded secret from your authenticator app setup. If your BCS account does not use 2FA, leave it empty or omit it entirely.
 
 ## Build and run
 
@@ -140,7 +145,7 @@ src/auth.ts    — BCS authentication (login, CSRF tokens, session persistence)
 
 ## How it works
 
-1. **Login** — POST to `/bcs/login` with credentials, capture `JSESSIONID` + `CSRF_Token` cookies. Sessions are cached locally (30 min TTL).
+1. **Login** — POST to `/bcs/login` with credentials, capture `JSESSIONID` + `CSRF_Token` cookies. If 2FA is enabled, the TOTP code is generated automatically from `BCS_TOTP_SECRET`. Sessions are cached locally (30 min TTL).
 2. **Read** — GET the day effort recording page (~600KB HTML), parse all form fields (~400+).
 3. **Expand** — AJAX request to expand project tree nodes and reveal bookable tasks.
 4. **Book** — Append a new effort row to the form state, POST the entire form back. Each booking always creates a new entry (dual-path strategy for empty vs. occupied task rows).
