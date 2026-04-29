@@ -6,7 +6,9 @@ import {
   parseExpandedTasks,
   parsePspTreeNames,
   getWeekDates,
+  deriveDayType,
 } from "../api.js";
+import type { AttendanceEntry } from "../api.js";
 
 const SAMPLE_HTML = `
 <html><body>
@@ -16,18 +18,18 @@ const SAMPLE_HTML = `
   <input type="hidden" name="daytimerecording,Selections,effortRecordingDate,__calendar_state" value="D20260409">
 
   <!-- Attendance: existing row -->
-  <input type="hidden" name="daytimerecording,Content,daytimerecordingAttendance,Columns,recordType,listeditoid_ATT1.recordType" value="unsavedAttendance">
-  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart_hour,listeditoid_ATT1.attandenceStart_hour" value="8">
-  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart_minute,listeditoid_ATT1.attandenceStart_minute" value="00">
-  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceEnd_hour,listeditoid_ATT1.attandenceEnd_hour" value="17">
-  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceEnd_minute,listeditoid_ATT1.attandenceEnd_minute" value="00">
-  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceDuration_hour,listeditoid_ATT1.attandenceDuration_hour" value="9">
-  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceDuration_minute,listeditoid_ATT1.attandenceDuration_minute" value="00">
+  <input type="hidden" name="daytimerecording,Content,daytimerecordingAttendance,Columns,recordType,listeditoid_ATT1.recordType" value="attendance">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart,listeditoid_ATT1.attandenceStart_hour" value="8">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart,listeditoid_ATT1.attandenceStart_minute" value="00">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceEnd,listeditoid_ATT1.attandenceEnd_hour" value="17">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceEnd,listeditoid_ATT1.attandenceEnd_minute" value="00">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceDuration,listeditoid_ATT1.attandenceDuration_hour" value="9">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceDuration,listeditoid_ATT1.attandenceDuration_minute" value="00">
 
-  <!-- Attendance: $new$ row (should be skipped by parseAttendance) -->
+  <!-- Attendance: $new$ row (template for new attendance) -->
   <input type="hidden" name="daytimerecording,Content,daytimerecordingAttendance,Columns,recordType,listeditoid_$new$1234_JTimeSpan.recordType" value="unsavedAttendance">
-  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart_hour,listeditoid_$new$1234_JTimeSpan.attandenceStart_hour" value="">
-  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart_minute,listeditoid_$new$1234_JTimeSpan.attandenceStart_minute" value="">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart,listeditoid_$new$1234_JTimeSpan.attandenceStart_hour" value="">
+  <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceStart,listeditoid_$new$1234_JTimeSpan.attandenceStart_minute" value="">
 
   <!-- Attendance: $new$ pause row -->
   <input type="hidden" name="daytimerecording,Content,daytimerecordingAttendance,Columns,recordType,listeditoid_$new$5678_JTimeSpan.recordType" value="unsavedPause">
@@ -135,24 +137,43 @@ describe("api", () => {
   });
 
   describe("parseAttendance", () => {
-    it("extracts existing attendance rows", () => {
+    it("extracts all attendance rows including $new$", () => {
       const entries = parseAttendance(SAMPLE_HTML);
-      expect(entries).toHaveLength(1);
-      const att = entries[0]!;
-      expect(att.oid).toBe("ATT1");
-      expect(att.startHour).toBe(8);
-      expect(att.startMinute).toBe(0);
-      expect(att.endHour).toBe(17);
-      expect(att.endMinute).toBe(0);
-      expect(att.durationHour).toBe(9);
-      expect(att.durationMinute).toBe(0);
-      expect(att.recordType).toBe("unsavedAttendance");
+      expect(entries).toHaveLength(3);
+
+      const saved = entries.find((e) => e.oid === "ATT1")!;
+      expect(saved.startHour).toBe(8);
+      expect(saved.startMinute).toBe(0);
+      expect(saved.endHour).toBe(17);
+      expect(saved.endMinute).toBe(0);
+      expect(saved.durationHour).toBe(9);
+      expect(saved.durationMinute).toBe(0);
+      expect(saved.recordType).toBe("attendance");
+
+      const unsaved = entries.find(
+        (e) => e.recordType === "unsavedAttendance",
+      )!;
+      expect(unsaved.oid).toContain("$new$");
+
+      const pause = entries.find((e) => e.recordType === "unsavedPause")!;
+      expect(pause.oid).toContain("$new$");
     });
 
-    it("skips $new$ rows", () => {
-      const entries = parseAttendance(SAMPLE_HTML);
-      const newRows = entries.filter((e) => e.oid.includes("$new$"));
-      expect(newRows).toHaveLength(0);
+    it("parses event label from attandenceLabel cell", () => {
+      const html = `<html><body><form><table><tbody>
+        <tr>
+          <td>
+            <input type="hidden" name="daytimerecording,Content,daytimerecordingAttendance,Columns,recordType,listeditoid_EVT1_JAppointment.recordType" value="event">
+            <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceDuration,listeditoid_EVT1_JAppointment.attandenceDuration_hour" value="8">
+            <input type="text" name="daytimerecording,Content,daytimerecordingAttendance,Columns,attandenceDuration,listeditoid_EVT1_JAppointment.attandenceDuration_minute" value="00">
+          </td>
+          <td name="attandenceLabel"><a><span>Freizeitausgleich</span></a></td>
+        </tr>
+      </tbody></table></form></body></html>`;
+      const entries = parseAttendance(html);
+      const event = entries.find((e) => e.recordType === "event")!;
+      expect(event.label).toBe("Freizeitausgleich");
+      expect(event.durationHour).toBe(8);
     });
 
     it("returns empty array for html without attendance", () => {
@@ -244,6 +265,61 @@ describe("api", () => {
     it("returns empty array for empty fields", () => {
       const tasks = parseExpandedTasks([]);
       expect(tasks).toHaveLength(0);
+    });
+  });
+
+  describe("deriveDayType", () => {
+    const base: AttendanceEntry = {
+      oid: "X",
+      startHour: 0,
+      startMinute: 0,
+      endHour: 0,
+      endMinute: 0,
+      durationHour: 0,
+      durationMinute: 0,
+      recordType: "attendance",
+    };
+
+    it("returns workday for saved attendance with duration", () => {
+      const result = deriveDayType([{ ...base, durationHour: 9 }]);
+      expect(result.dayType).toBe("workday");
+    });
+
+    it("returns workday for unsavedAttendance with duration", () => {
+      const result = deriveDayType([
+        { ...base, recordType: "unsavedAttendance", durationHour: 9 },
+      ]);
+      expect(result.dayType).toBe("workday");
+    });
+
+    it("returns absence with reason for event", () => {
+      const result = deriveDayType([
+        { ...base, recordType: "event", durationHour: 8, label: "Urlaub" },
+      ]);
+      expect(result.dayType).toBe("absence");
+      expect(result.absenceReason).toBe("Urlaub");
+    });
+
+    it("returns holiday when no attendance and no event", () => {
+      const result = deriveDayType([
+        { ...base, recordType: "unsavedAttendance", durationHour: 0 },
+        { ...base, oid: "Y", recordType: "distributed", durationHour: 0 },
+      ]);
+      expect(result.dayType).toBe("holiday");
+    });
+
+    it("returns absence even when unsavedAttendance also present", () => {
+      const result = deriveDayType([
+        {
+          ...base,
+          recordType: "event",
+          durationHour: 8,
+          label: "Freizeitausgleich",
+        },
+        { ...base, oid: "Y", recordType: "unsavedAttendance", durationHour: 0 },
+      ]);
+      expect(result.dayType).toBe("absence");
+      expect(result.absenceReason).toBe("Freizeitausgleich");
     });
   });
 

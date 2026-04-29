@@ -58,8 +58,32 @@ BCS uses **form-based server-side rendering**, not a REST API.
 ### Page structure
 
 - **PSP Tree**: Project rows are readonly aggregates. Task rows appear after AJAX tree expansion (`ajax_request=open`).
-- **Attendance**: Has `$new$` rows with `recordType=unsavedAttendance` / `unsavedPause` for creating entries. `$new$` OIDs change per page load.
-- **Events**: Calendar appointments, read-only.
+- **Attendance**: Has `$new$` rows with `recordType=unsavedAttendance` / `unsavedPause` for creating entries. `$new$` OIDs change per page load. On days without saved attendance, `$new$` rows are pre-filled with default values (e.g. 8:00–17:00, 1h pause).
+- **Events**: Absence entries (vacation, sick leave, comp time). `recordType=event`, OID ends in `_JAppointment`. Label extracted from `<a><span>` in `attandenceLabel` cell. `_helper` JSON contains `_subtyp` (e.g. `OvertimeCompensation`).
+
+### Day type interpretation
+
+`DaySummary.dayType` classifies each day:
+
+| dayType | Condition | unbookedHours |
+|---------|-----------|---------------|
+| `workday` | Attendance with duration > 0 (saved or unsaved) | Calculated normally |
+| `absence` | Has `event` row (vacation, sick, comp time) | Always 0 |
+| `holiday` | No attendance, no events (empty unsavedAttendance 0h) | Always 0 |
+
+`absenceReason` contains the human-readable label (e.g. "Freizeitausgleich", "Urlaub") parsed from the event row's `attandenceLabel` cell.
+
+### Attendance recordTypes
+
+| recordType | Meaning | Source |
+|------------|---------|--------|
+| `attendance` | Saved working time | Non-`$new$` row |
+| `pause` | Saved pause | Non-`$new$` row |
+| `unsavedAttendance` | Template / default attendance | `$new$` row, pre-filled on days without bookings |
+| `unsavedPause` | Template / default pause | `$new$` row |
+| `event` | Absence (vacation, sick, comp time) | `_JAppointment` OID |
+| `distributed` | BCS-internal: booked portion of attendance | `_Temp` OID, ignored in calculations |
+| `undistributed` | BCS-internal: unbooked portion of attendance | `_Temp` OID, ignored in calculations |
 
 ### Booking flow (dual-path)
 
@@ -92,7 +116,8 @@ Uses sequential requests per day (not `Promise.all()`) because BCS is stateful a
 - `expandTreeNode()` returns `_JEffort` OIDs when effort exists on a task, not `_JTask`. Fallback verification via `effortTargetOid` matching is needed.
 - Form field deduplication: page HTML may already contain task fields from server-remembered tree expansion. Both `bookEffort()` and `deleteEffort()` filter duplicates.
 - `_helper` JSON metadata fields must be appended (not set) for `$new$` rows — BCS expects duplicate keys.
-- Attendance recordTypes: `unsavedAttendance`/`distributed`/`undistributed` = working time, `unsavedPause` = pause.
+- Attendance field names: column is the base name (e.g. `attandenceStart`), field includes suffix (e.g. `attandenceStart_hour`). See "Attendance recordTypes" table above for all types.
+- `$new$` attendance rows must not be filtered from `parseAttendance()` — on days without saved attendance, they contain the actual default values. `setAttendance()` separates saved vs. `$new$` rows for write logic.
 - Project/task names are extracted from `<a><span>` elements in PSP tree `<tr>` rows via `parsePspTreeNames()`.
 - CSRF_Token check must happen AFTER the 2FA probe, not before — BCS may not set it until TOTP verification completes.
 - `BCS_TOTP_SECRET` is optional. All auth code must handle both paths (with and without 2FA).

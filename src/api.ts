@@ -24,6 +24,7 @@ export interface AttendanceEntry {
   durationHour: number;
   durationMinute: number;
   recordType: string;
+  label?: string;
 }
 
 export interface TaskDetail {
@@ -36,7 +37,11 @@ export interface TaskDetail {
   recordType: string;
 }
 
+export type DayType = "workday" | "holiday" | "absence";
+
 export interface DaySummary {
+  dayType: DayType;
+  absenceReason?: string;
   attendance: AttendanceEntry[];
   projects: ProjectAggregate[];
   bookedHours: number;
@@ -204,9 +209,29 @@ export function parsePspTreeNames(html: string): Map<string, string> {
 }
 
 export function parseAttendance(html: string): AttendanceEntry[] {
+  const root = parseHtml(html);
   const formState = toFormMap(parseFormState(html));
   const entries: AttendanceEntry[] = [];
   const seenOids = new Set<string>();
+
+  // Pre-build event label map: OID -> label text from <a><span> in attandenceLabel cells
+  const eventLabels = new Map<string, string>();
+  for (const inp of root.querySelectorAll("input[name]")) {
+    const name = inp.getAttribute("name") ?? "";
+    if (!name.includes(`${ATTENDANCE_PREFIX},recordType,listeditoid_`)) continue;
+    if (!name.endsWith(".recordType")) continue;
+    const oidMatch = /listeditoid_([^.]+)/.exec(name);
+    const oid = oidMatch?.[1];
+    if (!oid) continue;
+    const val = inp.getAttribute("value");
+    if (val !== "event") continue;
+    let tr = inp.parentNode;
+    while (tr && tr.tagName !== "TR") tr = tr.parentNode;
+    const labelTd = tr?.querySelector("td[name='attandenceLabel']");
+    const spans = labelTd?.querySelectorAll("a span") ?? [];
+    const text = [...spans].map((s) => s.text?.trim()).filter(Boolean).join(" ");
+    if (text) eventLabels.set(oid, text);
+  }
 
   for (const [key, value] of formState) {
     if (
@@ -216,27 +241,29 @@ export function parseAttendance(html: string): AttendanceEntry[] {
       const m = /listeditoid_([^.]+)/.exec(key);
       const oid = m?.[1];
       if (!oid || seenOids.has(oid)) continue;
-      if (oid.includes("$new$")) continue;
       seenOids.add(oid);
 
-      const get = (field: string) =>
+      const get = (column: string, field: string) =>
         parseInt(
           formState.get(
-            `${ATTENDANCE_PREFIX},${field},listeditoid_${oid}.${field}`,
+            `${ATTENDANCE_PREFIX},${column},listeditoid_${oid}.${field}`,
           ) ?? "0",
           10,
         ) || 0;
 
-      entries.push({
+      const entry: AttendanceEntry = {
         oid,
-        startHour: get("attandenceStart_hour"),
-        startMinute: get("attandenceStart_minute"),
-        endHour: get("attandenceEnd_hour"),
-        endMinute: get("attandenceEnd_minute"),
-        durationHour: get("attandenceDuration_hour"),
-        durationMinute: get("attandenceDuration_minute"),
+        startHour: get("attandenceStart", "attandenceStart_hour"),
+        startMinute: get("attandenceStart", "attandenceStart_minute"),
+        endHour: get("attandenceEnd", "attandenceEnd_hour"),
+        endMinute: get("attandenceEnd", "attandenceEnd_minute"),
+        durationHour: get("attandenceDuration", "attandenceDuration_hour"),
+        durationMinute: get("attandenceDuration", "attandenceDuration_minute"),
         recordType: value,
-      });
+      };
+      const label = eventLabels.get(oid);
+      if (label) entry.label = label;
+      entries.push(entry);
     }
   }
 
@@ -322,6 +349,29 @@ export function parseExpandedTasks(
   return tasks;
 }
 
+export function deriveDayType(attendance: AttendanceEntry[]): {
+  dayType: DayType;
+  absenceReason?: string;
+} {
+  const event = attendance.find((a) => a.recordType === "event");
+  if (event) {
+    return { dayType: "absence", absenceReason: event.label };
+  }
+
+  // No event: check if any real attendance exists (saved or unsaved with values)
+  const hasAttendance = attendance.some(
+    (a) =>
+      (a.recordType === "attendance" ||
+        a.recordType === "unsavedAttendance") &&
+      a.durationHour + a.durationMinute > 0,
+  );
+  if (!hasAttendance) {
+    return { dayType: "holiday" };
+  }
+
+  return { dayType: "workday" };
+}
+
 export async function getDaySummary(date: string): Promise<DaySummary> {
   const html = await fetchDayPage(date);
   const attendance = parseAttendance(html);
@@ -336,25 +386,31 @@ export async function getDaySummary(date: string): Promise<DaySummary> {
     formFields: parseFormState(html).length,
   });
 
+  const { dayType, absenceReason } = deriveDayType(attendance);
+
   let bookedTotal = 0;
   for (const p of projects) {
     bookedTotal += p.hours * 60 + p.minutes;
   }
 
   let workingMinutes = 0;
-  for (const a of attendance) {
-    if (a.recordType === "unsavedPause") {
-      workingMinutes -= a.durationHour * 60 + a.durationMinute;
-    } else {
-      // All non-pause types count as working time:
-      // unsavedAttendance, distributed, undistributed, etc.
-      workingMinutes += a.durationHour * 60 + a.durationMinute;
+  if (dayType === "workday") {
+    for (const a of attendance) {
+      if (a.recordType === "distributed" || a.recordType === "undistributed") {
+        continue;
+      }
+      if (a.recordType === "unsavedPause" || a.recordType === "pause") {
+        workingMinutes -= a.durationHour * 60 + a.durationMinute;
+      } else {
+        workingMinutes += a.durationHour * 60 + a.durationMinute;
+      }
     }
   }
 
   const unbookedTotal = Math.max(0, workingMinutes - bookedTotal);
 
-  return {
+  const summary: DaySummary = {
+    dayType,
     attendance,
     projects,
     bookedHours: Math.floor(bookedTotal / 60),
@@ -362,6 +418,8 @@ export async function getDaySummary(date: string): Promise<DaySummary> {
     unbookedHours: Math.floor(unbookedTotal / 60),
     unbookedMinutes: unbookedTotal % 60,
   };
+  if (absenceReason) summary.absenceReason = absenceReason;
+  return summary;
 }
 
 function formatDateLocal(d: Date): string {
@@ -444,8 +502,14 @@ export async function setAttendance(params: {
   const html = await fetchDayPage(params.date);
   const formFields = parseFormState(html);
 
-  // Check for existing saved attendance (non-$new$ rows)
-  const existingAttendance = parseAttendance(html);
+  // Separate saved attendance (real OIDs) from $new$ template rows
+  const allAttendance = parseAttendance(html);
+  const savedAttendance = allAttendance.filter(
+    (a) =>
+      !a.oid.includes("$new$") &&
+      a.recordType !== "distributed" &&
+      a.recordType !== "undistributed",
+  );
 
   // Find $new$ attendance and pause OIDs
   const formMap = toFormMap(formFields);
@@ -464,26 +528,22 @@ export async function setAttendance(params: {
     }
   }
 
-  // Use existing attendance OID if available, otherwise $new$
+  // Use saved attendance OID if available, otherwise $new$
   const attendanceOid =
-    existingAttendance.length > 0
-      ? existingAttendance[0]!.oid
-      : newAttendanceOid;
+    savedAttendance.length > 0 ? savedAttendance[0]!.oid : newAttendanceOid;
 
   if (!attendanceOid) {
     throw new Error("No attendance row found on page");
   }
 
-  // Filter out ALL $new$ attendance rows when updating existing,
+  // Filter out ALL $new$ attendance rows when updating existing saved rows,
   // or keep only the ones we need when creating new
   let filteredFields: [string, string][];
-  if (existingAttendance.length > 0) {
-    // Existing attendance: filter out all $new$ rows
+  if (savedAttendance.length > 0) {
     filteredFields = formFields.filter(
       ([name]) => !name.includes("daytimerecordingAttendance,$new$"),
     );
   } else {
-    // New attendance: keep only the OIDs we're using
     const keepOids = new Set<string>([attendanceOid]);
     if (newPauseOid && (params.pauseHour || params.pauseMinute)) {
       keepOids.add(newPauseOid);
@@ -497,34 +557,52 @@ export async function setAttendance(params: {
   const body = new URLSearchParams(filteredFields);
 
   // Set attendance start/end
-  const setField = (oid: string, field: string, value: string) =>
+  const setField = (
+    oid: string,
+    column: string,
+    field: string,
+    value: string,
+  ) =>
     body.set(
-      `${ATTENDANCE_PREFIX},${field},listeditoid_${oid}.${field}`,
+      `${ATTENDANCE_PREFIX},${column},listeditoid_${oid}.${field}`,
       value,
     );
 
-  setField(attendanceOid, "attandenceStart_hour", String(params.startHour));
   setField(
     attendanceOid,
+    "attandenceStart",
+    "attandenceStart_hour",
+    String(params.startHour),
+  );
+  setField(
+    attendanceOid,
+    "attandenceStart",
     "attandenceStart_minute",
     String(params.startMinute).padStart(2, "0"),
   );
-  setField(attendanceOid, "attandenceEnd_hour", String(params.endHour));
   setField(
     attendanceOid,
+    "attandenceEnd",
+    "attandenceEnd_hour",
+    String(params.endHour),
+  );
+  setField(
+    attendanceOid,
+    "attandenceEnd",
     "attandenceEnd_minute",
     String(params.endMinute).padStart(2, "0"),
   );
 
-  // Set pause if provided (only for $new$ rows — existing pause handling TBD)
   if (newPauseOid && (params.pauseHour || params.pauseMinute)) {
     setField(
       newPauseOid,
+      "attandenceDuration",
       "attandenceDuration_hour",
       String(params.pauseHour ?? 0),
     );
     setField(
       newPauseOid,
+      "attandenceDuration",
       "attandenceDuration_minute",
       String(params.pauseMinute ?? 0).padStart(2, "0"),
     );
