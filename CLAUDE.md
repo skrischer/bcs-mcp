@@ -18,7 +18,7 @@ pnpm start:stdio  # Start in stdio mode (for Claude Desktop)
 src/index.ts   — Entry point (--stdio for stdio transport, default: HTTP)
 src/server.ts  — MCP session management, request routing
 src/logger.ts  — Console + file logging (bcs-mcp.log, truncated per start)
-src/tools.ts   — MCP tool definitions (6 tools)
+src/tools.ts   — MCP tool definitions (8 tools)
 src/api.ts     — BCS form-based API (HTML GET/POST, form state parsing)
 src/auth.ts    — BCS authentication (login, CSRF, TOTP 2FA, session persistence)
 ```
@@ -110,6 +110,14 @@ BCS uses **form-based server-side rendering**, not a REST API.
 ### Week summary
 
 Uses sequential requests per day (not `Promise.all()`) because BCS is stateful and concurrent requests cause race conditions.
+
+### Overtime balance (Arbeitszeitkonto)
+
+Fetched via AJAX from the notification board (`/bcs/mybcs/notificationoverview/display`). BCS uses lazy-loaded board components — the overtime chart data is not in the initial HTML but loaded via a separate GET request with `bcs_ajax_type=2&bcs_ajax_component=mybcsboard,Content,overtimeDiagram&bcs_ajax_additional_param,ListDisplayAJAXTrigger=LazyLoad`. Response is JSON: `loadEvents[0].event.data` contains an array of data points with `orgKey` identifiers and values in minutes (`deputatSummaryEffortSum`).
+
+### Vacation status (Urlaubsbudget)
+
+Fetched from `/bcs/mybcs/vacation/display` with query params `userbudgets,Choices,sourcechoice,tab=budgets&group,Choices,sourcechoice,tab=vacationlist`. The vacation budget is a regular HTML table with `thead` containing "Urlaubsbudget". Each `<td>` has a `name` attribute matching the column identifier (e.g. `vacationIndicatorTotalBudget`, `appointmentIndicatorRemainingVacationToday`). Values use German decimal format (comma separator).
 
 ## Known Gotchas
 

@@ -7,6 +7,7 @@ import {
   parsePspTreeNames,
   getWeekDates,
   deriveDayType,
+  parseVacationTable,
 } from "../api.js";
 import type { AttendanceEntry } from "../api.js";
 
@@ -345,6 +346,64 @@ describe("api", () => {
       const dates = getWeekDates("2026-04-12"); // Sunday
       expect(dates[0]).toBe("2026-04-06");
       expect(dates[4]).toBe("2026-04-10");
+    });
+  });
+
+  describe("parseVacationTable", () => {
+    const VACATION_HTML = `<html><body><form>
+      <table>
+        <thead>
+          <tr>
+            <th name="vacationYear">Jahr</th>
+            <th name="vacationState">Status</th>
+            <th name="vacationIndicatorTotalBudget">Gesamt</th>
+            <th name="vacationBaseBudget">Basis</th>
+            <th name="vacationExtraBudget">Sonder</th>
+            <th name="vacationRemainingBudget">Rest</th>
+            <th name="vacationIndicatorUsedRemainingBudget">Genehmigt/Genommen</th>
+            <th name="vacationIndicatorCompleteRemainingUsedBudget">Verplant</th>
+            <th name="appointmentIndicatorSumVacationDurationPlanned">Geplant</th>
+            <th name="appointmentIndicatorSumVacationDurationSubmitted">Beantragt</th>
+            <th name="appointmentIndicatorVacationDurationApprovedAndTaken">Genehmigt/Genommen</th>
+            <th name="appointmentIndicatorRemainingVacationToday">Verfügbar</th>
+          </tr>
+          <tr><th colspan="4">Urlaubsbudget</th></tr>
+        </thead>
+        <tr>
+          <td name="vacationYear">2026</td>
+          <td name="vacationState">Aktiv</td>
+          <td name="vacationIndicatorTotalBudget">23,5</td>
+          <td name="vacationBaseBudget">20,0</td>
+          <td name="vacationExtraBudget">0,0</td>
+          <td name="vacationRemainingBudget">3,5</td>
+          <td name="vacationIndicatorUsedRemainingBudget">2,0</td>
+          <td name="vacationIndicatorCompleteRemainingUsedBudget">1,0</td>
+          <td name="appointmentIndicatorSumVacationDurationPlanned">1,0</td>
+          <td name="appointmentIndicatorSumVacationDurationSubmitted">0,0</td>
+          <td name="appointmentIndicatorVacationDurationApprovedAndTaken">2,0</td>
+          <td name="appointmentIndicatorRemainingVacationToday">20,5</td>
+        </tr>
+      </table>
+    </form></body></html>`;
+
+    it("parses vacation budget table", () => {
+      const status = parseVacationTable(VACATION_HTML);
+      expect(status.year).toBe(2026);
+      expect(status.totalDays).toBe(23.5);
+      expect(status.baseDays).toBe(20);
+      expect(status.extraDays).toBe(0);
+      expect(status.carryoverDays).toBe(3.5);
+      expect(status.usedDays).toBe(2);
+      expect(status.plannedDays).toBe(1);
+      expect(status.requestedDays).toBe(0);
+      expect(status.approvedDays).toBe(2);
+      expect(status.availableDays).toBe(20.5);
+    });
+
+    it("throws when table is missing", () => {
+      expect(() => parseVacationTable("<html><body></body></html>")).toThrow(
+        "Vacation budget table not found",
+      );
     });
   });
 });

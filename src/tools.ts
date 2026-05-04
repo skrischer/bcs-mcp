@@ -7,6 +7,8 @@ import {
   bookEffort,
   deleteEffort,
   setAttendance,
+  getOvertimeBalance,
+  getVacationStatus,
 } from "./api.js";
 import { log } from "./logger.js";
 
@@ -199,6 +201,30 @@ export function registerTools(server: McpServer): void {
         log("tool:error", "bcs_set_attendance", msg);
         throw err;
       }
+    },
+  );
+
+  server.tool(
+    "bcs_get_overtime_balance",
+    "Get current working time account balance (Arbeitszeitkonto): flexi-time balance, target vs actual hours, and saldo. All values in minutes.",
+    {},
+    async () => {
+      log("tool:call", "bcs_get_overtime_balance", {});
+      const balance = await getOvertimeBalance();
+      log("tool:result", "bcs_get_overtime_balance", balance);
+      return jsonResponse(balance);
+    },
+  );
+
+  server.tool(
+    "bcs_get_vacation_status",
+    "Get vacation budget for the current year: total days, base/extra/carryover, used, planned, requested, approved, and available days remaining.",
+    {},
+    async () => {
+      log("tool:call", "bcs_get_vacation_status", {});
+      const status = await getVacationStatus();
+      log("tool:result", "bcs_get_vacation_status", status);
+      return jsonResponse(status);
     },
   );
 }

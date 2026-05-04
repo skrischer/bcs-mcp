@@ -3,6 +3,8 @@ import { authenticatedFetch, getConfig } from "./auth.js";
 import { log } from "./logger.js";
 
 const PAGE_PATH = "/bcs/mybcs/dayeffortrecording/display";
+const NOTIFICATION_PATH = "/bcs/mybcs/notificationoverview/display";
+const VACATION_PATH = "/bcs/mybcs/vacation/display";
 const PSP_PREFIX = "daytimerecording,Content,daytimerecordingPspTree,Columns";
 // BCS misspells "attendance" as "attandence" in all field names
 const ATTENDANCE_PREFIX =
@@ -1030,4 +1032,186 @@ function getAvailableTaskOids(formState: Map<string, string>): string[] {
     }
   }
   return oids;
+}
+
+// --- Overtime Balance ---
+
+export interface OvertimeBalance {
+  balanceMinutes: number;
+  targetMinutes: number;
+  actualMinutes: number;
+  saldoMinutes: number;
+  attendanceMinutes: number;
+}
+
+interface OvertimeDataPoint {
+  orgKey: string;
+  deputatSummaryEffortSum: string;
+  deputatSummaryItem: string;
+  datatype: string;
+}
+
+interface OvertimeLoadEvent {
+  event: {
+    data: OvertimeDataPoint[];
+  };
+}
+
+interface OvertimeAjaxResponse {
+  loadEvents: OvertimeLoadEvent[];
+}
+
+function parseOvertimeMinutes(
+  data: OvertimeDataPoint[],
+  orgKey: string,
+): number {
+  const point = data.find((d) => d.orgKey === orgKey);
+  if (!point) return 0;
+  return parseInt(point.deputatSummaryEffortSum, 10) || 0;
+}
+
+export async function getOvertimeBalance(): Promise<OvertimeBalance> {
+  const config = getConfig();
+  const params = new URLSearchParams({
+    bcs_ajax_type: "2",
+    "bcs_ajax_component": "mybcsboard,Content,overtimeDiagram",
+    oid: config.BCS_USER_OID,
+    "bcs_ajax_additional_param,ListDisplayAJAXTrigger": "LazyLoad",
+    "mybcsboard,__componentTitleComposed": "true",
+    AjaxRequestUniqueId: String(Date.now()),
+  });
+
+  const url = `${config.BCS_URL}${NOTIFICATION_PATH}?${params.toString()}`;
+  log("api:fetch", "Fetching overtime balance", { userOid: config.BCS_USER_OID });
+  const response = await authenticatedFetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch overtime balance: ${response.status}`);
+  }
+
+  const json = (await response.json()) as OvertimeAjaxResponse;
+  const data = json.loadEvents?.[0]?.event?.data;
+  if (!data || !Array.isArray(data)) {
+    throw new Error("Overtime data not found in AJAX response");
+  }
+
+  log("api:parse", "Overtime data points", { count: data.length });
+
+  return {
+    balanceMinutes: parseOvertimeMinutes(data, "preliminaryFlexiAccBalance"),
+    targetMinutes: parseOvertimeMinutes(data, "deputatSummaryTargetSumExpense"),
+    actualMinutes: parseOvertimeMinutes(
+      data,
+      "deputatSummaryRealSumExpenseWithoutOvertime",
+    ),
+    saldoMinutes: parseOvertimeMinutes(
+      data,
+      "deputatSummarySaldoWithoutOvertime",
+    ),
+    attendanceMinutes: parseOvertimeMinutes(
+      data,
+      "deputatSummaryRealAttendanceWork",
+    ),
+  };
+}
+
+// --- Vacation Status ---
+
+export interface VacationStatus {
+  year: number;
+  totalDays: number;
+  baseDays: number;
+  extraDays: number;
+  carryoverDays: number;
+  usedDays: number;
+  plannedDays: number;
+  requestedDays: number;
+  approvedDays: number;
+  availableDays: number;
+}
+
+function parseGermanDecimal(value: string): number {
+  return parseFloat(value.replace(",", ".")) || 0;
+}
+
+export function parseVacationTable(html: string): VacationStatus {
+  const root = parseHtml(html);
+
+  const tables = root.querySelectorAll("table");
+  let targetTable;
+  for (const table of tables) {
+    const thead = table.querySelector("thead");
+    if (thead && thead.text.includes("Urlaubsbudget")) {
+      targetTable = table;
+      break;
+    }
+  }
+
+  if (!targetTable) {
+    throw new Error("Vacation budget table not found");
+  }
+
+  // Find the data row with a year value
+  const rows = targetTable.querySelectorAll("tr");
+  let dataRow;
+  for (const row of rows) {
+    const yearCell = row.querySelector("td[name='vacationYear']");
+    if (yearCell && yearCell.text.trim()) {
+      dataRow = row;
+      break;
+    }
+  }
+
+  if (!dataRow) {
+    throw new Error("No vacation data row found");
+  }
+
+  const cell = (name: string): string =>
+    dataRow.querySelector(`td[name='${name}']`)?.text?.trim() ?? "0";
+
+  return {
+    year: parseInt(cell("vacationYear"), 10) || 0,
+    totalDays: parseGermanDecimal(cell("vacationIndicatorTotalBudget")),
+    baseDays: parseGermanDecimal(cell("vacationBaseBudget")),
+    extraDays: parseGermanDecimal(cell("vacationExtraBudget")),
+    carryoverDays: parseGermanDecimal(cell("vacationRemainingBudget")),
+    usedDays: parseGermanDecimal(
+      cell("vacationIndicatorUsedRemainingBudget"),
+    ),
+    plannedDays: parseGermanDecimal(
+      cell("appointmentIndicatorSumVacationDurationPlanned"),
+    ),
+    requestedDays: parseGermanDecimal(
+      cell("appointmentIndicatorSumVacationDurationSubmitted"),
+    ),
+    approvedDays: parseGermanDecimal(
+      cell("appointmentIndicatorVacationDurationApprovedAndTaken"),
+    ),
+    availableDays: parseGermanDecimal(
+      cell("appointmentIndicatorRemainingVacationToday"),
+    ),
+  };
+}
+
+export async function getVacationStatus(): Promise<VacationStatus> {
+  const config = getConfig();
+  const params = new URLSearchParams({
+    oid: config.BCS_USER_OID,
+    "userbudgets,Choices,sourcechoice,tab": "budgets",
+    "group,Choices,sourcechoice,tab": "vacationlist",
+  });
+
+  const url = `${config.BCS_URL}${VACATION_PATH}?${params.toString()}`;
+  log("api:fetch", "Fetching vacation status", {
+    userOid: config.BCS_USER_OID,
+  });
+  const response = await authenticatedFetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch vacation page: ${response.status}`);
+  }
+
+  const html = await response.text();
+  log("api:fetch", "Vacation page received", { htmlLength: html.length });
+  return parseVacationTable(html);
 }
