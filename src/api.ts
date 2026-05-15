@@ -5,6 +5,7 @@ import { log } from "./logger.js";
 const PAGE_PATH = "/bcs/mybcs/dayeffortrecording/display";
 const NOTIFICATION_PATH = "/bcs/mybcs/notificationoverview/display";
 const VACATION_PATH = "/bcs/mybcs/vacation/display";
+const DEPUTAT_SUMMARY_PATH = "/bcs/mybcs/deputatsummary/display";
 const PSP_PREFIX = "daytimerecording,Content,daytimerecordingPspTree,Columns";
 // BCS misspells "attendance" as "attandence" in all field names
 const ATTENDANCE_PREFIX =
@@ -1214,4 +1215,167 @@ export async function getVacationStatus(): Promise<VacationStatus> {
   const html = await response.text();
   log("api:fetch", "Vacation page received", { htmlLength: html.length });
   return parseVacationTable(html);
+}
+
+// --- Work Time Evaluation (Arbeitszeitauswertung) ---
+
+export interface WorkTimeEvaluation {
+  asOfDate: string;
+  vacationTotalDays: number;
+  vacationCompensatedDays: number;
+  vacationTakenDays: number;
+  overtimeAccountAsOfDateMinutes: number;
+  evaluationFrom: string;
+  evaluationTo: string;
+  projectBookingsMinutes: number;
+  internalTasksMinutes: number;
+  vacationMinutes: number;
+  sicknessMinutes: number;
+  actualMinutes: number;
+  targetMinutes: number;
+  balanceMinutes: number;
+  currentOvertimeMinutes: number;
+  vacationAvailableDays: number;
+  vacationPlannedDays: number;
+  vacationRequestedDays: number;
+  vacationApprovedDays: number;
+  vacationRemainingDays: number;
+  generatedAt: string;
+}
+
+function parseHoursMinutes(value: string): number {
+  const match = value.match(/(-?)(\d+):(\d+)/);
+  if (!match) return 0;
+  const sign = match[1] === "-" ? -1 : 1;
+  return sign * (parseInt(match[2], 10) * 60 + parseInt(match[3], 10));
+}
+
+function parseGermanDays(value: string): number {
+  const match = value.match(/(-?[\d.,]+)/);
+  if (!match) return 0;
+  return parseFloat(match[1].replace(/\./g, "").replace(",", ".")) || 0;
+}
+
+interface DeputatRow {
+  pm: string;
+  item: string;
+  sum: string;
+}
+
+export function parseWorkTimeEvaluation(html: string): WorkTimeEvaluation {
+  const root = parseHtml(html);
+
+  const tables = root.querySelectorAll("table");
+  let target;
+  for (const t of tables) {
+    if (t.querySelector('td[name="deputatSummaryItem"]')) {
+      target = t;
+      break;
+    }
+  }
+  if (!target) {
+    throw new Error("Work time evaluation table not found");
+  }
+
+  const rows: DeputatRow[] = target.querySelectorAll("tr").map((tr) => ({
+    pm: tr.querySelector('td[name="deputatSummaryPlusMinus"]')?.text?.trim() ?? "",
+    item: tr.querySelector('td[name="deputatSummaryItem"]')?.text?.trim() ?? "",
+    sum: tr.querySelector('td[name="deputatSummaryEffortSum"]')?.text?.trim() ?? "",
+  }));
+
+  const findSum = (predicate: (item: string) => boolean): string =>
+    rows.find((r) => predicate(r.item))?.sum ?? "";
+
+  const findItem = (predicate: (pm: string, item: string) => boolean): string =>
+    rows.find((r) => predicate(r.pm, r.item))?.item ?? "";
+
+  const stichtag = findItem(
+    (pm, item) => pm === "Stand" && item.startsWith("zum Stichtag"),
+  );
+  const asOfDate = stichtag.replace(/^zum Stichtag\s*/, "").trim();
+
+  const auswertung = findItem((pm) => pm === "Auswertung");
+  const auswertungMatch = auswertung.match(/vom\s+(\S+)\s+bis\s+(.+)$/);
+  const evaluationFrom = auswertungMatch?.[1]?.trim() ?? "";
+  const evaluationTo = auswertungMatch?.[2]?.trim() ?? "";
+
+  const hinweis = findItem((pm) => pm === "Hinweis");
+  const hinweisMatch = hinweis.match(/am\s+(\S+?)\s+erstellt/);
+  const generatedAt = hinweisMatch?.[1] ?? "";
+
+  return {
+    asOfDate,
+    vacationTotalDays: parseGermanDays(
+      findSum((item) => item.startsWith("Urlaubsbudget Gesamt")),
+    ),
+    vacationCompensatedDays: parseGermanDays(
+      findSum((item) => item === "davon abgegoltener Urlaub"),
+    ),
+    vacationTakenDays: parseGermanDays(
+      findSum((item) => item === "davon genommen/genehmigt"),
+    ),
+    overtimeAccountAsOfDateMinutes: parseHoursMinutes(
+      findSum((item) => item === "Stand Arbeitszeitkonto"),
+    ),
+    evaluationFrom,
+    evaluationTo,
+    projectBookingsMinutes: parseHoursMinutes(
+      findSum((item) => item === "Projektbuchungen"),
+    ),
+    internalTasksMinutes: parseHoursMinutes(
+      findSum((item) => item === "Betriebsaufgaben"),
+    ),
+    vacationMinutes: parseHoursMinutes(
+      findSum((item) => item === "Urlaub"),
+    ),
+    sicknessMinutes: parseHoursMinutes(
+      findSum((item) => item === "Krankheit"),
+    ),
+    actualMinutes: parseHoursMinutes(findSum((item) => item === "Ist")),
+    targetMinutes: parseHoursMinutes(findSum((item) => item === "Soll")),
+    balanceMinutes: parseHoursMinutes(findSum((item) => item === "Saldo")),
+    currentOvertimeMinutes: parseHoursMinutes(
+      findSum((item) => item === "Vorhandene Überstunden"),
+    ),
+    vacationAvailableDays: parseGermanDays(
+      findSum((item) => item === "Vorhandenes Urlaubsbudget"),
+    ),
+    vacationPlannedDays: parseGermanDays(
+      findSum((item) => item === "davon geplant"),
+    ),
+    vacationRequestedDays: parseGermanDays(
+      findSum((item) => item === "davon beantragt"),
+    ),
+    vacationApprovedDays: parseGermanDays(
+      findSum((item) => item === "davon genehmigt"),
+    ),
+    vacationRemainingDays: parseGermanDays(
+      findSum((item) => item === "Verfügbares Urlaubsbudget"),
+    ),
+    generatedAt,
+  };
+}
+
+export async function getWorkTimeEvaluation(): Promise<WorkTimeEvaluation> {
+  const config = getConfig();
+  const params = new URLSearchParams({
+    oid: config.BCS_USER_OID,
+    "group,Choices,sourcechoice,tab": "todatedeputattable",
+  });
+
+  const url = `${config.BCS_URL}${DEPUTAT_SUMMARY_PATH}?${params.toString()}`;
+  log("api:fetch", "Fetching work time evaluation", {
+    userOid: config.BCS_USER_OID,
+  });
+  const response = await authenticatedFetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch work time evaluation: ${response.status}`);
+  }
+
+  const html = await response.text();
+  log("api:fetch", "Work time evaluation page received", {
+    htmlLength: html.length,
+  });
+  return parseWorkTimeEvaluation(html);
 }

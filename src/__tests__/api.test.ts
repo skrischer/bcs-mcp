@@ -8,6 +8,7 @@ import {
   getWeekDates,
   deriveDayType,
   parseVacationTable,
+  parseWorkTimeEvaluation,
 } from "../api.js";
 import type { AttendanceEntry } from "../api.js";
 
@@ -404,6 +405,106 @@ describe("api", () => {
       expect(() => parseVacationTable("<html><body></body></html>")).toThrow(
         "Vacation budget table not found",
       );
+    });
+  });
+
+  describe("parseWorkTimeEvaluation", () => {
+    const row = (pm: string, item: string, sum: string): string =>
+      `<tr>
+        <td name="deputatSummaryPlusMinus">${pm}</td>
+        <td name="deputatSummaryItem">${item}</td>
+        <td name="deputatSummaryEffortSum">${sum}</td>
+      </tr>`;
+
+    const EVALUATION_HTML = `<html><body><table>
+      ${row("Stand", "zum Stichtag 30.04.26", "")}
+      ${row("", "Urlaubsbudget Gesamt [2026]", "22,0 Tage")}
+      ${row("", "davon abgegoltener Urlaub", "0,0 Tage")}
+      ${row("", "davon genommen/genehmigt", "6,0 Tage")}
+      ${row("", "Stand Arbeitszeitkonto", "00:00h")}
+      ${row("Auswertung", "vom 01.05.26 bis einschließlich gestern", "")}
+      ${row("", "Projektbuchungen", "49:50h")}
+      ${row("+", "Betriebsaufgaben", "16:40h")}
+      ${row("+", "Urlaub", "00:00h")}
+      ${row("+", "Krankheit", "00:00h")}
+      ${row("=", "Ist", "66:30h")}
+      ${row("-", "Soll", "64:00h")}
+      ${row("=", "Saldo", "02:30h")}
+      ${row("Stand", "bis einschließlich gestern", "")}
+      ${row("", "Vorhandene Überstunden", "02:30h")}
+      ${row("", "Vorhandenes Urlaubsbudget", "16,0 Tage")}
+      ${row("", "davon geplant", "0,0 Tage")}
+      ${row("", "davon beantragt", "0,0 Tage")}
+      ${row("", "davon genehmigt", "0,0 Tage")}
+      ${row("", "Verfügbares Urlaubsbudget", "16,0 Tage")}
+      ${row("Hinweis", "Die Auswertung wurde am 15.05.2026 erstellt.", "")}
+    </table></body></html>`;
+
+    it("parses all values from the evaluation table", () => {
+      const e = parseWorkTimeEvaluation(EVALUATION_HTML);
+
+      expect(e.asOfDate).toBe("30.04.26");
+      expect(e.vacationTotalDays).toBe(22);
+      expect(e.vacationCompensatedDays).toBe(0);
+      expect(e.vacationTakenDays).toBe(6);
+      expect(e.overtimeAccountAsOfDateMinutes).toBe(0);
+
+      expect(e.evaluationFrom).toBe("01.05.26");
+      expect(e.evaluationTo).toBe("einschließlich gestern");
+      expect(e.projectBookingsMinutes).toBe(49 * 60 + 50);
+      expect(e.internalTasksMinutes).toBe(16 * 60 + 40);
+      expect(e.vacationMinutes).toBe(0);
+      expect(e.sicknessMinutes).toBe(0);
+      expect(e.actualMinutes).toBe(66 * 60 + 30);
+      expect(e.targetMinutes).toBe(64 * 60);
+      expect(e.balanceMinutes).toBe(2 * 60 + 30);
+
+      expect(e.currentOvertimeMinutes).toBe(2 * 60 + 30);
+      expect(e.vacationAvailableDays).toBe(16);
+      expect(e.vacationPlannedDays).toBe(0);
+      expect(e.vacationRequestedDays).toBe(0);
+      expect(e.vacationApprovedDays).toBe(0);
+      expect(e.vacationRemainingDays).toBe(16);
+
+      expect(e.generatedAt).toBe("15.05.2026");
+    });
+
+    it("handles negative balance and decimal vacation days", () => {
+      const html = `<html><body><table>
+        ${row("Stand", "zum Stichtag 31.03.26", "")}
+        ${row("", "Urlaubsbudget Gesamt [2026]", "23,5 Tage")}
+        ${row("", "davon abgegoltener Urlaub", "0,0 Tage")}
+        ${row("", "davon genommen/genehmigt", "2,5 Tage")}
+        ${row("", "Stand Arbeitszeitkonto", "-01:15h")}
+        ${row("Auswertung", "vom 01.04.26 bis einschließlich gestern", "")}
+        ${row("", "Projektbuchungen", "00:00h")}
+        ${row("+", "Betriebsaufgaben", "00:00h")}
+        ${row("+", "Urlaub", "00:00h")}
+        ${row("+", "Krankheit", "00:00h")}
+        ${row("=", "Ist", "00:00h")}
+        ${row("-", "Soll", "08:00h")}
+        ${row("=", "Saldo", "-08:00h")}
+        ${row("Stand", "bis einschließlich gestern", "")}
+        ${row("", "Vorhandene Überstunden", "-09:15h")}
+        ${row("", "Vorhandenes Urlaubsbudget", "21,0 Tage")}
+        ${row("", "davon geplant", "0,0 Tage")}
+        ${row("", "davon beantragt", "0,0 Tage")}
+        ${row("", "davon genehmigt", "0,0 Tage")}
+        ${row("", "Verfügbares Urlaubsbudget", "21,0 Tage")}
+        ${row("Hinweis", "Die Auswertung wurde am 01.04.2026 erstellt.", "")}
+      </table></body></html>`;
+
+      const e = parseWorkTimeEvaluation(html);
+      expect(e.vacationTotalDays).toBe(23.5);
+      expect(e.overtimeAccountAsOfDateMinutes).toBe(-75);
+      expect(e.balanceMinutes).toBe(-480);
+      expect(e.currentOvertimeMinutes).toBe(-9 * 60 - 15);
+    });
+
+    it("throws when the evaluation table is missing", () => {
+      expect(() =>
+        parseWorkTimeEvaluation("<html><body></body></html>"),
+      ).toThrow("Work time evaluation table not found");
     });
   });
 });

@@ -9,6 +9,7 @@ import {
   setAttendance,
   getOvertimeBalance,
   getVacationStatus,
+  getWorkTimeEvaluation,
 } from "./api.js";
 import { log } from "./logger.js";
 
@@ -225,6 +226,18 @@ export function registerTools(server: McpServer): void {
       const status = await getVacationStatus();
       log("tool:result", "bcs_get_vacation_status", status);
       return jsonResponse(status);
+    },
+  );
+
+  server.tool(
+    "bcs_get_work_time_evaluation",
+    "Get consolidated work time evaluation (Arbeitszeitauswertung): stichtag vacation snapshot, current-month breakdown (project bookings, internal tasks, vacation, sickness, actual/target/balance), current overtime, and full vacation budget breakdown. Time values in minutes; vacation in days. Evaluation period is from start of current month through yesterday.",
+    {},
+    async () => {
+      log("tool:call", "bcs_get_work_time_evaluation", {});
+      const evaluation = await getWorkTimeEvaluation();
+      log("tool:result", "bcs_get_work_time_evaluation", evaluation);
+      return jsonResponse(evaluation);
     },
   );
 }

@@ -18,7 +18,7 @@ pnpm start:stdio  # Start in stdio mode (for Claude Desktop)
 src/index.ts   — Entry point (--stdio for stdio transport, default: HTTP)
 src/server.ts  — MCP session management, request routing
 src/logger.ts  — Console + file logging (bcs-mcp.log, truncated per start)
-src/tools.ts   — MCP tool definitions (8 tools)
+src/tools.ts   — MCP tool definitions (9 tools)
 src/api.ts     — BCS form-based API (HTML GET/POST, form state parsing)
 src/auth.ts    — BCS authentication (login, CSRF, TOTP 2FA, session persistence)
 ```
@@ -118,6 +118,10 @@ Fetched via AJAX from the notification board (`/bcs/mybcs/notificationoverview/d
 ### Vacation status (Urlaubsbudget)
 
 Fetched from `/bcs/mybcs/vacation/display` with query params `userbudgets,Choices,sourcechoice,tab=budgets&group,Choices,sourcechoice,tab=vacationlist`. The vacation budget is a regular HTML table with `thead` containing "Urlaubsbudget". Each `<td>` has a `name` attribute matching the column identifier (e.g. `vacationIndicatorTotalBudget`, `appointmentIndicatorRemainingVacationToday`). Values use German decimal format (comma separator).
+
+### Work time evaluation (Arbeitszeitauswertung)
+
+Fetched from `/bcs/mybcs/deputatsummary/display` with query params `oid={USER_OID}&group,Choices,sourcechoice,tab=todatedeputattable`. Unlike `vacation/display`, cells use **generic** name attributes (`deputatSummaryPlusMinus`, `deputatSummaryItem`, `deputatSummaryEffortSum`) repeated for every row — so rows are identified by their German label text (e.g. `"Projektbuchungen"`, `"Saldo"`, `"Verfügbares Urlaubsbudget"`). The table mixes three logical sections separated by header rows whose `plusminus` cell contains `"Stand"`, `"Auswertung"`, or `"Hinweis"`. Default evaluation period is start of current month through yesterday. Time values are `hh:mm` strings (with optional leading `-` for negative balances); vacation values are German decimals with `" Tage"` suffix.
 
 ## Known Gotchas
 
