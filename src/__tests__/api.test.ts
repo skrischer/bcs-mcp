@@ -8,6 +8,8 @@ import {
   getWeekDates,
   deriveDayType,
   parseVacationTable,
+  parseAbsenceTable,
+  parseGermanDate,
 } from "../api.js";
 import type { AttendanceEntry } from "../api.js";
 
@@ -404,6 +406,96 @@ describe("api", () => {
       expect(() => parseVacationTable("<html><body></body></html>")).toThrow(
         "Vacation budget table not found",
       );
+    });
+  });
+
+  describe("parseGermanDate", () => {
+    it("parses date with weekday prefix", () => {
+      expect(parseGermanDate("Do. 02.01.25")).toBe("2025-01-02");
+    });
+
+    it("parses date with different weekday", () => {
+      expect(parseGermanDate("Di. 13.05.25")).toBe("2025-05-13");
+    });
+
+    it("parses date without weekday prefix", () => {
+      expect(parseGermanDate("02.01.25")).toBe("2025-01-02");
+    });
+  });
+
+  describe("parseAbsenceTable", () => {
+    const ABSENCE_HTML = `<html><body>
+      <table id="group,Choices,vacationlist_table">
+        <thead><tr class="fixableRowHeader_jq row"><th>Beginn</th></tr></thead>
+        <tr class="row dragVisualisationTarget default selectableRow" data-row-id="1_JAppointment">
+          <td name="SELECTION"></td>
+          <td name="eventStartDate">Do. 02.01.25</td>
+          <td name="eventEndDate">Do. 02.01.25</td>
+          <td name="oid"><table><tr><td><a><span>Urlaub</span></a></td></tr></table></td>
+          <td name="eventType">Basis- oder Resturlaub</td>
+          <td name="vacationDurationInPeriod" data-value-to-sum="1.0">1,00t&nbsp;</td>
+          <td name="state">Genehmigt</td>
+        </tr>
+        <tr class="row dragVisualisationTarget default selectableRow" data-row-id="2_JAppointment">
+          <td name="SELECTION"></td>
+          <td name="eventStartDate">Di. 11.02.25</td>
+          <td name="eventEndDate">Di. 11.02.25</td>
+          <td name="oid"><table><tr><td><a><span>Krankheit</span></a></td></tr></table></td>
+          <td name="eventType">Krankheit</td>
+          <td name="vacationDurationInPeriod" data-value-to-sum="1.0">1,00t&nbsp;</td>
+          <td name="state">Offen</td>
+        </tr>
+        <tr class="row dragVisualisationTarget default selectableRow" data-row-id="3_JAppointment">
+          <td name="SELECTION"></td>
+          <td name="eventStartDate">Mo. 23.02.26</td>
+          <td name="eventEndDate">Mo. 23.02.26</td>
+          <td name="oid"><table><tr><td><a><span>Freizeitausgleich</span></a></td></tr></table></td>
+          <td name="eventType">Freizeitausgleich</td>
+          <td name="vacationDurationInPeriod" data-value-to-sum="1.0">08:00h</td>
+          <td name="state">Genehmigt</td>
+        </tr>
+      </table>
+    </body></html>`;
+
+    it("parses vacation entry", () => {
+      const absences = parseAbsenceTable(ABSENCE_HTML);
+      expect(absences[0]).toEqual({
+        startDate: "2025-01-02",
+        endDate: "2025-01-02",
+        subject: "Urlaub",
+        type: "Basis- oder Resturlaub",
+        workDays: 1,
+        status: "Genehmigt",
+      });
+    });
+
+    it("parses sick day entry", () => {
+      const absences = parseAbsenceTable(ABSENCE_HTML);
+      expect(absences[1]).toEqual({
+        startDate: "2025-02-11",
+        endDate: "2025-02-11",
+        subject: "Krankheit",
+        type: "Krankheit",
+        workDays: 1,
+        status: "Offen",
+      });
+    });
+
+    it("parses FZA entry with hours display using data-value-to-sum", () => {
+      const absences = parseAbsenceTable(ABSENCE_HTML);
+      expect(absences[2]).toEqual({
+        startDate: "2026-02-23",
+        endDate: "2026-02-23",
+        subject: "Freizeitausgleich",
+        type: "Freizeitausgleich",
+        workDays: 1,
+        status: "Genehmigt",
+      });
+    });
+
+    it("returns empty array for page without absence rows", () => {
+      const absences = parseAbsenceTable("<html><body></body></html>");
+      expect(absences).toEqual([]);
     });
   });
 });

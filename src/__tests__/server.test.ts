@@ -167,7 +167,7 @@ describe("HTTP MCP Server", () => {
     >;
     const tools = result.tools as { name: string }[];
     expect(tools).toBeDefined();
-    expect(tools.length).toBe(6);
+    expect(tools.length).toBe(8);
 
     const toolNames = tools.map((t) => t.name);
     expect(toolNames).toContain("bcs_get_week_summary");
@@ -231,8 +231,8 @@ describe("HTTP MCP Server", () => {
       string,
       unknown
     >;
-    expect((resultA.tools as unknown[]).length).toBe(6);
-    expect((resultB.tools as unknown[]).length).toBe(6);
+    expect((resultA.tools as unknown[]).length).toBe(8);
+    expect((resultB.tools as unknown[]).length).toBe(8);
   });
 
   it("should return 405 for unsupported HTTP methods", async () => {

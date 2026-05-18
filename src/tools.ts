@@ -218,11 +218,17 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     "bcs_get_vacation_status",
-    "Get vacation budget for the current year: total days, base/extra/carryover, used, planned, requested, approved, and available days remaining.",
-    {},
-    async () => {
-      log("tool:call", "bcs_get_vacation_status", {});
-      const status = await getVacationStatus();
+    "Get vacation budget and absences (vacation, sick days, comp time) for a year. Returns budget totals plus a list of all absence entries with dates, type, duration, and approval status.",
+    {
+      year: z
+        .number()
+        .int()
+        .optional()
+        .describe("Year to query (e.g. 2025). Defaults to current year."),
+    },
+    async ({ year }) => {
+      log("tool:call", "bcs_get_vacation_status", { year });
+      const status = await getVacationStatus(year);
       log("tool:result", "bcs_get_vacation_status", status);
       return jsonResponse(status);
     },

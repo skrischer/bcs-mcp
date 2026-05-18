@@ -115,9 +115,13 @@ Uses sequential requests per day (not `Promise.all()`) because BCS is stateful a
 
 Fetched via AJAX from the notification board (`/bcs/mybcs/notificationoverview/display`). BCS uses lazy-loaded board components — the overtime chart data is not in the initial HTML but loaded via a separate GET request with `bcs_ajax_type=2&bcs_ajax_component=mybcsboard,Content,overtimeDiagram&bcs_ajax_additional_param,ListDisplayAJAXTrigger=LazyLoad`. Response is JSON: `loadEvents[0].event.data` contains an array of data points with `orgKey` identifiers and values in minutes (`deputatSummaryEffortSum`).
 
-### Vacation status (Urlaubsbudget)
+### Vacation status (Urlaubsbudget + Abwesenheiten)
 
-Fetched from `/bcs/mybcs/vacation/display` with query params `userbudgets,Choices,sourcechoice,tab=budgets&group,Choices,sourcechoice,tab=vacationlist`. The vacation budget is a regular HTML table with `thead` containing "Urlaubsbudget". Each `<td>` has a `name` attribute matching the column identifier (e.g. `vacationIndicatorTotalBudget`, `appointmentIndicatorRemainingVacationToday`). Values use German decimal format (comma separator).
+Fetched from `/bcs/mybcs/vacation/display` with query params `userbudgets,Choices,sourcechoice,tab=budgets&group,Choices,sourcechoice,tab=vacationlist`. Optional year filter via `__calendar_state=Y{year}0101` params for both budget and event list components.
+
+**Budget table**: `<thead>` containing "Urlaubsbudget". Each `<td>` has a `name` attribute (e.g. `vacationIndicatorTotalBudget`, `appointmentIndicatorRemainingVacationToday`). Values use German decimal format (comma separator).
+
+**Absence table**: `<tr class="selectableRow">` rows with `<td name="eventStartDate">`, `<td name="eventEndDate">`, `<td name="oid">` (subject in nested `<a><span>`), `<td name="eventType">`, `<td name="vacationDurationInPeriod">` (work days in `data-value-to-sum` attribute), `<td name="state">`. Dates in German format ("Do. 02.01.25"). Duration display varies: days ("10,00t") vs hours ("08:00h" for FZA), but `data-value-to-sum` always contains the numeric day value.
 
 ## Known Gotchas
 

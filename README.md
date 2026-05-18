@@ -15,7 +15,7 @@ BCS has no public API — it uses server-side rendered HTML forms. This server s
 | `bcs_delete_effort` | Delete a booked effort entry |
 | `bcs_set_attendance` | Set attendance times (start, end, pause) |
 | `bcs_get_overtime_balance` | Working time account: flexi-time balance, target vs actual hours |
-| `bcs_get_vacation_status` | Vacation budget: total, used, planned, available days |
+| `bcs_get_vacation_status` | Vacation budget + absences list (vacation, sick, comp time) with optional year filter |
 
 ## Prerequisites
 

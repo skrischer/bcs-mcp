@@ -7,6 +7,8 @@ vi.mock("../api.js", () => ({
   bookEffort: vi.fn(),
   deleteEffort: vi.fn(),
   setAttendance: vi.fn(),
+  getOvertimeBalance: vi.fn(),
+  getVacationStatus: vi.fn(),
 }));
 
 import {
@@ -16,12 +18,16 @@ import {
   bookEffort,
   deleteEffort,
   setAttendance,
+  getOvertimeBalance,
+  getVacationStatus,
 } from "../api.js";
 import type {
   DaySummary,
   WeekSummary,
   TaskDetail,
   ProjectAggregate,
+  OvertimeBalance,
+  VacationStatus,
 } from "../api.js";
 
 const mockGetDaySummary = vi.mocked(getDaySummary);
@@ -30,6 +36,8 @@ const mockGetTasksForProject = vi.mocked(getTasksForProject);
 const mockBookEffort = vi.mocked(bookEffort);
 const mockDeleteEffort = vi.mocked(deleteEffort);
 const mockSetAttendance = vi.mocked(setAttendance);
+const mockGetOvertimeBalance = vi.mocked(getOvertimeBalance);
+const mockGetVacationStatus = vi.mocked(getVacationStatus);
 
 import { registerTools } from "../tools.js";
 
@@ -83,8 +91,8 @@ describe("tools", () => {
     registerTools(mockServer as unknown as Parameters<typeof registerTools>[0]);
   });
 
-  it("registers all 6 tools", () => {
-    expect(mockServer.tools).toHaveLength(6);
+  it("registers all 8 tools", () => {
+    expect(mockServer.tools).toHaveLength(8);
     const names = mockServer.tools.map((t) => t.name);
     expect(names).toContain("bcs_get_week_summary");
     expect(names).toContain("bcs_get_day_summary");
@@ -92,6 +100,8 @@ describe("tools", () => {
     expect(names).toContain("bcs_book_effort");
     expect(names).toContain("bcs_delete_effort");
     expect(names).toContain("bcs_set_attendance");
+    expect(names).toContain("bcs_get_overtime_balance");
+    expect(names).toContain("bcs_get_vacation_status");
   });
 
   describe("bcs_get_week_summary", () => {
@@ -134,13 +144,21 @@ describe("tools", () => {
 
       const handler = getToolHandler(mockServer.tools, "bcs_get_week_summary");
       const result = await handler({ date: "2026-04-10" });
-      const text = result.content[0]?.text ?? "";
+      const data = JSON.parse(result.content[0]?.text ?? "{}") as WeekSummary;
 
-      expect(text).toContain("Mo 2026-04-06: 8h 0m");
-      expect(text).toContain("Fr 2026-04-10: 0h 0m");
-      expect(text).toContain("unbooked: 2h 0m");
-      expect(text).toContain("Week total booked: 29h 30m");
-      expect(text).toContain("Week total unbooked: 10h 30m");
+      expect(data.days).toHaveLength(5);
+      expect(data.days[0]).toEqual({
+        date: "2026-04-06",
+        summary: expect.objectContaining({ bookedHours: 8, bookedMinutes: 0 }),
+      });
+      expect(data.days[4]).toEqual({
+        date: "2026-04-10",
+        summary: expect.objectContaining({ bookedHours: 0, unbookedHours: 8 }),
+      });
+      expect(data.totalBookedHours).toBe(29);
+      expect(data.totalBookedMinutes).toBe(30);
+      expect(data.totalUnbookedHours).toBe(10);
+      expect(data.totalUnbookedMinutes).toBe(30);
     });
   });
 
@@ -177,12 +195,22 @@ describe("tools", () => {
 
       const handler = getToolHandler(mockServer.tools, "bcs_get_day_summary");
       const result = await handler({ date: "2026-04-10" });
-      const text = result.content[0]?.text ?? "";
+      const data = JSON.parse(result.content[0]?.text ?? "{}") as DaySummary;
 
-      expect(text).toContain("8:00 - 17:00");
-      expect(text).toContain("Akquise (PROJ1): 4h 30m");
-      expect(text).toContain("Booked: 6h 30m");
-      expect(text).toContain("Unbooked: 1h 30m");
+      expect(data.attendance[0]).toMatchObject({
+        startHour: 8,
+        startMinute: 0,
+        endHour: 17,
+        endMinute: 0,
+      });
+      expect(data.projects).toEqual([
+        { projectOid: "PROJ1", name: "Akquise", hours: 4, minutes: 30 },
+        { projectOid: "PROJ2", name: "Internes Projekt", hours: 2, minutes: 0 },
+      ]);
+      expect(data.bookedHours).toBe(6);
+      expect(data.bookedMinutes).toBe(30);
+      expect(data.unbookedHours).toBe(1);
+      expect(data.unbookedMinutes).toBe(30);
     });
   });
 
@@ -206,11 +234,18 @@ describe("tools", () => {
         date: "2026-04-10",
         projectOid: "PROJ1",
       });
-      const text = result.content[0]?.text ?? "";
+      const data = JSON.parse(result.content[0]?.text ?? "[]") as TaskDetail[];
 
-      expect(text).toContain("Neukundenakquise [TASK1]");
-      expect(text).toContain("2h 0m");
-      expect(text).toContain("JIRA-42");
+      expect(data).toHaveLength(1);
+      expect(data[0]).toEqual({
+        lineOid: "TASK1",
+        name: "Neukundenakquise",
+        recordOid: "REC1",
+        hours: 2,
+        minutes: 0,
+        description: "JIRA-42",
+        recordType: "effort",
+      });
     });
   });
 
@@ -230,11 +265,15 @@ describe("tools", () => {
         minutes: 0,
         description: "Development",
       });
-      const text = result.content[0]?.text ?? "";
+      const data = JSON.parse(result.content[0]?.text ?? "{}") as {
+        success: boolean;
+        projects: ProjectAggregate[];
+      };
 
-      expect(text).toContain("Booking confirmed");
-      expect(text).toContain("3h 0m");
-      expect(text).toContain("Akquise (PROJ1): 5h 0m");
+      expect(data.success).toBe(true);
+      expect(data.projects).toEqual([
+        { projectOid: "PROJ1", name: "Akquise", hours: 5, minutes: 0 },
+      ]);
     });
   });
 
@@ -251,10 +290,15 @@ describe("tools", () => {
         projectOid: "PROJ1",
         taskLineOid: "TASK1",
       });
-      const text = result.content[0]?.text ?? "";
+      const data = JSON.parse(result.content[0]?.text ?? "{}") as {
+        success: boolean;
+        projects: ProjectAggregate[];
+      };
 
-      expect(text).toContain("Effort deleted");
-      expect(text).toContain("Akquise (PROJ1): 0h 0m");
+      expect(data.success).toBe(true);
+      expect(data.projects).toEqual([
+        { projectOid: "PROJ1", name: "Akquise", hours: 0, minutes: 0 },
+      ]);
     });
   });
 
@@ -270,9 +314,11 @@ describe("tools", () => {
         endHour: 17,
         endMinute: 0,
       });
-      const text = result.content[0]?.text ?? "";
+      const data = JSON.parse(result.content[0]?.text ?? "{}") as {
+        success: boolean;
+      };
 
-      expect(text).toContain("Attendance set: 8:00 - 17:00");
+      expect(data.success).toBe(true);
     });
 
     it("reports failure", async () => {
@@ -286,8 +332,11 @@ describe("tools", () => {
         endHour: 17,
         endMinute: 0,
       });
+      const data = JSON.parse(result.content[0]?.text ?? "{}") as {
+        success: boolean;
+      };
 
-      expect(result.content[0]?.text).toContain("Failed");
+      expect(data.success).toBe(false);
     });
   });
 });

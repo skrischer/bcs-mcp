@@ -1117,6 +1117,15 @@ export async function getOvertimeBalance(): Promise<OvertimeBalance> {
 
 // --- Vacation Status ---
 
+export interface AbsenceEntry {
+  startDate: string;
+  endDate: string;
+  subject: string;
+  type: string;
+  workDays: number;
+  status: string;
+}
+
 export interface VacationStatus {
   year: number;
   totalDays: number;
@@ -1128,13 +1137,61 @@ export interface VacationStatus {
   requestedDays: number;
   approvedDays: number;
   availableDays: number;
+  absences: AbsenceEntry[];
 }
 
 function parseGermanDecimal(value: string): number {
   return parseFloat(value.replace(",", ".")) || 0;
 }
 
-export function parseVacationTable(html: string): VacationStatus {
+export function parseGermanDate(dateStr: string): string {
+  const cleaned = dateStr.replace(/^[A-Za-z]+\.\s*/, "");
+  const [day, month, yearPart] = cleaned.split(".");
+  const year =
+    yearPart && yearPart.length === 2 ? `20${yearPart}` : yearPart ?? "2000";
+  return `${year}-${month?.padStart(2, "0")}-${day?.padStart(2, "0")}`;
+}
+
+export function parseAbsenceTable(html: string): AbsenceEntry[] {
+  const root = parseHtml(html);
+  const rows = root.querySelectorAll(
+    "tr.selectableRow",
+  );
+
+  const absences: AbsenceEntry[] = [];
+  for (const row of rows) {
+    const startCell = row.querySelector("td[name='eventStartDate']");
+    if (!startCell) continue;
+
+    const endCell = row.querySelector("td[name='eventEndDate']");
+    const oidCell = row.querySelector("td[name='oid']");
+    const typeCell = row.querySelector("td[name='eventType']");
+    const durationCell = row.querySelector(
+      "td[name='vacationDurationInPeriod']",
+    );
+    const stateCell = row.querySelector("td[name='state']");
+
+    const subject =
+      oidCell?.querySelector("span")?.text?.trim() ?? "";
+    const rawDays = durationCell?.getAttribute("data-value-to-sum");
+    const workDays = rawDays ? parseFloat(rawDays) : 0;
+
+    absences.push({
+      startDate: parseGermanDate(startCell.text.trim()),
+      endDate: parseGermanDate(endCell?.text?.trim() ?? startCell.text.trim()),
+      subject,
+      type: typeCell?.text?.trim() ?? "",
+      workDays,
+      status: stateCell?.text?.trim() ?? "",
+    });
+  }
+
+  return absences;
+}
+
+export function parseVacationTable(
+  html: string,
+): Omit<VacationStatus, "absences"> {
   const root = parseHtml(html);
 
   const tables = root.querySelectorAll("table");
@@ -1193,7 +1250,9 @@ export function parseVacationTable(html: string): VacationStatus {
   };
 }
 
-export async function getVacationStatus(): Promise<VacationStatus> {
+export async function getVacationStatus(
+  year?: number,
+): Promise<VacationStatus> {
   const config = getConfig();
   const params = new URLSearchParams({
     oid: config.BCS_USER_OID,
@@ -1201,9 +1260,22 @@ export async function getVacationStatus(): Promise<VacationStatus> {
     "group,Choices,sourcechoice,tab": "vacationlist",
   });
 
+  if (year) {
+    const calState = `Y${year}0101`;
+    params.set(
+      "userbudgets,Choices,budgets,Selections,vacationYearInterval,__calendar_state",
+      calState,
+    );
+    params.set(
+      "group,Choices,vacationlist,Selections,dateRange,__calendar_state",
+      calState,
+    );
+  }
+
   const url = `${config.BCS_URL}${VACATION_PATH}?${params.toString()}`;
   log("api:fetch", "Fetching vacation status", {
     userOid: config.BCS_USER_OID,
+    year,
   });
   const response = await authenticatedFetch(url);
 
@@ -1213,5 +1285,7 @@ export async function getVacationStatus(): Promise<VacationStatus> {
 
   const html = await response.text();
   log("api:fetch", "Vacation page received", { htmlLength: html.length });
-  return parseVacationTable(html);
+  const budget = parseVacationTable(html);
+  const absences = parseAbsenceTable(html);
+  return { ...budget, absences };
 }
