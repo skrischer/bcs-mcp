@@ -530,31 +530,32 @@ export async function setAttendance(params: {
     }
   }
 
-  // Use saved attendance OID if available, otherwise $new$
-  const attendanceOid =
-    savedAttendance.length > 0 ? savedAttendance[0]!.oid : newAttendanceOid;
+  // Prefer the saved row of each kind; fall back to the $new$ template row.
+  // The pause has its own saved row (recordType "pause") that must be updated
+  // on its own OID — writing only the $new$ pause leaves a saved pause untouched.
+  const savedAttendanceRow = savedAttendance.find(
+    (a) => a.recordType === "attendance",
+  );
+  const savedPauseRow = savedAttendance.find((a) => a.recordType === "pause");
+  const attendanceOid = savedAttendanceRow?.oid ?? newAttendanceOid;
+  const wantsPause =
+    params.pauseHour !== undefined || params.pauseMinute !== undefined;
+  const pauseOid = savedPauseRow?.oid ?? newPauseOid;
 
   if (!attendanceOid) {
     throw new Error("No attendance row found on page");
   }
 
-  // Filter out ALL $new$ attendance rows when updating existing saved rows,
-  // or keep only the ones we need when creating new
-  let filteredFields: [string, string][];
-  if (savedAttendance.length > 0) {
-    filteredFields = formFields.filter(
-      ([name]) => !name.includes("daytimerecordingAttendance,$new$"),
-    );
-  } else {
-    const keepOids = new Set<string>([attendanceOid]);
-    if (newPauseOid && (params.pauseHour || params.pauseMinute)) {
-      keepOids.add(newPauseOid);
-    }
-    filteredFields = formFields.filter(([name]) => {
-      if (!name.includes("daytimerecordingAttendance,$new$")) return true;
-      return [...keepOids].some((oid) => name.includes(oid));
-    });
-  }
+  // Drop $new$ template rows, except the ones we still need to create a row
+  // that has no saved counterpart yet (attendance and/or pause).
+  const keepNewOids = new Set<string>();
+  if (!savedAttendanceRow && newAttendanceOid)
+    keepNewOids.add(newAttendanceOid);
+  if (wantsPause && !savedPauseRow && newPauseOid) keepNewOids.add(newPauseOid);
+  const filteredFields = formFields.filter(([name]) => {
+    if (!name.includes("daytimerecordingAttendance,$new$")) return true;
+    return [...keepNewOids].some((oid) => name.includes(oid));
+  });
 
   const body = new URLSearchParams(filteredFields);
 
@@ -595,15 +596,37 @@ export async function setAttendance(params: {
     String(params.endMinute).padStart(2, "0"),
   );
 
-  if (newPauseOid && (params.pauseHour || params.pauseMinute)) {
+  // BCS validates the attendance row against its duration field, which it
+  // expects to match end - start (gross, before pause). The web UI recomputes
+  // this client-side on every edit; if we leave the old duration in place, BCS
+  // keeps the previous times and silently ignores the new start/end (the POST
+  // still returns 200). So recompute and send it ourselves.
+  const grossMinutes =
+    params.endHour * 60 +
+    params.endMinute -
+    (params.startHour * 60 + params.startMinute);
+  setField(
+    attendanceOid,
+    "attandenceDuration",
+    "attandenceDuration_hour",
+    String(Math.floor(grossMinutes / 60)),
+  );
+  setField(
+    attendanceOid,
+    "attandenceDuration",
+    "attandenceDuration_minute",
+    String(grossMinutes % 60).padStart(2, "0"),
+  );
+
+  if (pauseOid && wantsPause) {
     setField(
-      newPauseOid,
+      pauseOid,
       "attandenceDuration",
       "attandenceDuration_hour",
       String(params.pauseHour ?? 0),
     );
     setField(
-      newPauseOid,
+      pauseOid,
       "attandenceDuration",
       "attandenceDuration_minute",
       String(params.pauseMinute ?? 0).padStart(2, "0"),
