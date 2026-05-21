@@ -112,6 +112,7 @@ describe("tools", () => {
         unbookedH: number,
         unbookedM: number,
       ): DaySummary => ({
+        dayType: "workday",
         attendance: [],
         projects: [
           {
@@ -165,6 +166,7 @@ describe("tools", () => {
   describe("bcs_get_day_summary", () => {
     it("returns formatted summary with attendance and projects", async () => {
       const summary: DaySummary = {
+        dayType: "workday",
         attendance: [
           {
             oid: "ATT1",
