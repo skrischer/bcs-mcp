@@ -354,6 +354,10 @@ export async function refreshCsrfToken(): Promise<SessionData> {
   return getSession();
 }
 
+function isAuthFailureUrl(url: string): boolean {
+  return url.includes("/login") || url.includes("/totpVerification");
+}
+
 export async function authenticatedFetch(
   url: string,
   options: RequestInit = {},
@@ -380,11 +384,11 @@ export async function authenticatedFetch(
   if (
     response.status === 401 ||
     response.status === 403 ||
-    response.url.includes("/login")
+    isAuthFailureUrl(response.url)
   ) {
     log(
       "auth:fetch",
-      "Session invalid (status or login redirect), re-authenticating",
+      "Session invalid (status or login/2FA redirect), re-authenticating",
     );
     await invalidateSession();
     const newSession = await getSession();
@@ -393,9 +397,9 @@ export async function authenticatedFetch(
       redirected: retryResponse.redirected,
       finalUrl: retryResponse.url.replace(/\?.*/, "?..."),
     });
-    if (retryResponse.url.includes("/login")) {
+    if (isAuthFailureUrl(retryResponse.url)) {
       throw new Error(
-        "Authentication failed: redirected to login after re-authentication",
+        "Authentication failed: redirected to login/2FA after re-authentication",
       );
     }
     return retryResponse;
