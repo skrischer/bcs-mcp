@@ -709,12 +709,28 @@ export async function deleteEffort(params: {
   const { fields: taskFields } = await expandTreeNode(params.projectOid);
   const taskMap = toFormMap(taskFields);
 
-  const taskLineOid = params.taskLineOid;
-  const taskTypeKey = `${PSP_PREFIX},recordType,listeditoid_${taskLineOid}.recordType`;
+  // bcs_get_tasks returns the _JTask OID for empty tasks but the _JEffort OID
+  // once effort exists (expandTreeNode swaps them). Accept either: if the passed
+  // OID is not a row in the expand, resolve it to the effort row whose
+  // effortTargetOid matches it — the same fallback bookEffort uses.
+  let targetLineOid = params.taskLineOid;
+  const taskTypeKey = `${PSP_PREFIX},recordType,listeditoid_${targetLineOid}.recordType`;
   if (!taskMap.has(taskTypeKey)) {
-    throw new Error(
-      `Task ${taskLineOid} not found in project ${params.projectOid}`,
+    const effortEntry = parseExpandedTasks(taskFields).find(
+      (t) =>
+        taskMap.get(
+          `${PSP_PREFIX},effortTargetOid,listeditoid_${t.lineOid}.effortTargetOid`,
+        ) === params.taskLineOid,
     );
+    if (!effortEntry) {
+      const available = parseExpandedTasks(taskFields)
+        .map((t) => `${t.lineOid} (target: ${t.recordOid})`)
+        .join(", ");
+      throw new Error(
+        `Task ${params.taskLineOid} not found in project ${params.projectOid}. Available: ${available}`,
+      );
+    }
+    targetLineOid = effortEntry.lineOid;
   }
 
   const taskFieldKeys = new Set(taskFields.map(([name]) => name));
@@ -736,10 +752,10 @@ export async function deleteEffort(params: {
   ];
   for (const field of clearFields) {
     const col = field.replace(/_(?:hour|minute)$/, "");
-    const key = `${PSP_PREFIX},${col},listeditoid_${taskLineOid}.${field}`;
+    const key = `${PSP_PREFIX},${col},listeditoid_${targetLineOid}.${field}`;
     body.set(key, "");
   }
-  const descKey = `${PSP_PREFIX},description,listeditoid_${taskLineOid}.description`;
+  const descKey = `${PSP_PREFIX},description,listeditoid_${targetLineOid}.description`;
   body.set(descKey, "");
 
   body.set("daytimerecording,Apply", "Speichern");
