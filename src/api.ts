@@ -174,6 +174,19 @@ export function toFormMap(fields: [string, string][]): Map<string, string> {
   return new Map(fields);
 }
 
+// BCS reports save rejections in a `.messagedisplay.errors` block (each message
+// in a `.msg` element). It still returns HTTP 200, so this is the only reliable
+// signal that a POST was refused (e.g. booking deadline, validation errors).
+export function parseBcsErrors(html: string): string[] {
+  const root = parseHtml(html);
+  const messages: string[] = [];
+  for (const el of root.querySelectorAll(".messagedisplay.errors .msg")) {
+    const text = el.text?.replace(/\s+/g, " ").trim();
+    if (text) messages.push(text);
+  }
+  return messages;
+}
+
 export function parsePspTreeNames(html: string): Map<string, string> {
   const root = parseHtml(html);
   const names = new Map<string, string>();
@@ -768,7 +781,7 @@ export async function bookEffort(params: {
   hours: number;
   minutes: number;
   description: string;
-}): Promise<{ success: boolean; projects: ProjectAggregate[] }> {
+}): Promise<{ success: boolean; projects: ProjectAggregate[]; error?: string }> {
   const config = getConfig();
 
   // Step 1: GET page to obtain form state
@@ -987,10 +1000,32 @@ export async function bookEffort(params: {
   const projectMinutes = parseInt(responseMap.get(afterMin) ?? "0", 10);
   const projectTotal = projectHours * 60 + projectMinutes;
   const requestedTotal = params.hours * 60 + params.minutes;
-  const success = projectTotal >= requestedTotal;
+
+  // BCS returns 200 even when it rejects the save (e.g. the daily booking
+  // deadline "Tagesbuchungsfrist" locks past days). It reports the reason in an
+  // error message block; surface it instead of a bare success:false.
+  const bcsErrors = parseBcsErrors(responseHtml);
+  const success = projectTotal >= requestedTotal && bcsErrors.length === 0;
+
+  log("api:book", "save POST response", {
+    status: response.status,
+    finalUrl: response.url,
+    redirected: response.redirected,
+    path: taskRecordType === "neweffort" ? "A/neweffort" : "B/unsavedeffort",
+    requestedTotal,
+    projectTotal,
+    bcsErrors,
+  });
 
   const projects = parseProjectAggregates(responseHtml);
-  return { success, projects };
+  let error: string | undefined;
+  if (!success) {
+    error =
+      bcsErrors.length > 0
+        ? bcsErrors.join(" ")
+        : `BCS accepted the POST (status ${response.status}) but the project aggregate did not increase (booked ${projectHours}h${projectMinutes}m, requested ${params.hours}h${params.minutes}m). BCS silently discarded the effort.`;
+  }
+  return { success, projects, error };
 }
 
 function findProjectForTask(
