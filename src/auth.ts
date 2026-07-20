@@ -162,11 +162,31 @@ function detectTotpChallenge(
   return null;
 }
 
-function generateTotpCode(secret: string): string {
+async function getServerTimeOffset(baseUrl: string): Promise<number> {
+  try {
+    const before = Date.now();
+    const res = await fetch(`${baseUrl}/bcs/login`, { method: "HEAD" });
+    const after = Date.now();
+    const serverTime = new Date(res.headers.get("date") ?? "").getTime();
+    if (Number.isNaN(serverTime)) {
+      log("auth", "Server time unavailable (no Date header), using local time");
+      return 0;
+    }
+    const localTime = (before + after) / 2;
+    return serverTime - localTime;
+  } catch (err) {
+    log("auth", "Server time probe failed, using local time", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
+}
+
+function generateTotpCode(secret: string, serverTimeMs: number): string {
   const totp = new TOTP({
     secret: Secret.fromBase32(secret.replace(/\s+/g, "").toUpperCase()),
   });
-  return totp.generate();
+  return totp.generate({ timestamp: serverTimeMs });
 }
 
 export async function login(config: BcsConfig): Promise<LoginResult> {
@@ -275,8 +295,13 @@ export async function login(config: BcsConfig): Promise<LoginResult> {
     hiddenFields: Object.keys(challenge.hiddenFields).join(","),
   });
 
-  const code = generateTotpCode(config.BCS_TOTP_SECRET);
-  log("auth", "TOTP code generated", { length: code.length });
+  const serverOffsetMs = await getServerTimeOffset(config.BCS_URL);
+  const serverTimeMs = Date.now() + serverOffsetMs;
+  const code = generateTotpCode(config.BCS_TOTP_SECRET, serverTimeMs);
+  log("auth", "TOTP code generated", {
+    length: code.length,
+    serverOffsetSec: Math.round(serverOffsetMs / 1000),
+  });
 
   const totpBody = new URLSearchParams({
     ...challenge.hiddenFields,
