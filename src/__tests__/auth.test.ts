@@ -80,6 +80,13 @@ function makeTotpRejectedResponse(): Response {
   });
 }
 
+function makeServerTimeResponse(): Response {
+  return new Response(null, {
+    status: 200,
+    headers: { date: new Date().toUTCString() },
+  });
+}
+
 describe("auth", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());
@@ -189,6 +196,7 @@ describe("auth", () => {
         .mockResolvedValueOnce(makeLoginSuccessResponse())
         .mockResolvedValueOnce(makeProbeRedirectToTotp())
         .mockResolvedValueOnce(makeTotpChallengePageResponse())
+        .mockResolvedValueOnce(makeServerTimeResponse())
         .mockResolvedValueOnce(makeTotpSuccessResponse());
       vi.stubGlobal("fetch", mockFetch);
 
@@ -199,9 +207,9 @@ describe("auth", () => {
 
       expect(result.sessionId).toBe("abc123");
       expect(result.csrfToken).toBe("csrftoken456");
-      expect(mockFetch).toHaveBeenCalledTimes(5);
+      expect(mockFetch).toHaveBeenCalledTimes(6);
 
-      const totpCall = mockFetch.mock.calls[4];
+      const totpCall = mockFetch.mock.calls[5];
       expect(totpCall).toBeDefined();
       const totpUrl = totpCall![0] as string;
       expect(totpUrl).toContain("/bcs/totpVerification/");
@@ -243,6 +251,7 @@ describe("auth", () => {
         .mockResolvedValueOnce(makeLoginSuccessResponse())
         .mockResolvedValueOnce(makeProbeRedirectToTotp())
         .mockResolvedValueOnce(makeTotpChallengePageResponse())
+        .mockResolvedValueOnce(makeServerTimeResponse())
         .mockResolvedValueOnce(makeTotpRejectedResponse());
       vi.stubGlobal("fetch", mockFetch);
 

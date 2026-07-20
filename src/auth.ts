@@ -162,11 +162,20 @@ function detectTotpChallenge(
   return null;
 }
 
-function generateTotpCode(secret: string): string {
+async function getServerTimeOffset(baseUrl: string): Promise<number> {
+  const before = Date.now();
+  const res = await fetch(`${baseUrl}/bcs/login`, { method: "HEAD" });
+  const after = Date.now();
+  const serverTime = new Date(res.headers.get("date") ?? "").getTime();
+  const localTime = (before + after) / 2;
+  return serverTime - localTime;
+}
+
+function generateTotpCode(secret: string, serverTimeMs: number): string {
   const totp = new TOTP({
     secret: Secret.fromBase32(secret.replace(/\s+/g, "").toUpperCase()),
   });
-  return totp.generate();
+  return totp.generate({ timestamp: serverTimeMs });
 }
 
 export async function login(config: BcsConfig): Promise<LoginResult> {
@@ -275,8 +284,13 @@ export async function login(config: BcsConfig): Promise<LoginResult> {
     hiddenFields: Object.keys(challenge.hiddenFields).join(","),
   });
 
-  const code = generateTotpCode(config.BCS_TOTP_SECRET);
-  log("auth", "TOTP code generated", { length: code.length });
+  const serverOffsetMs = await getServerTimeOffset(config.BCS_URL);
+  const serverTimeMs = Date.now() + serverOffsetMs;
+  const code = generateTotpCode(config.BCS_TOTP_SECRET, serverTimeMs);
+  log("auth", "TOTP code generated", {
+    length: code.length,
+    serverOffsetSec: Math.round(serverOffsetMs / 1000),
+  });
 
   const totpBody = new URLSearchParams({
     ...challenge.hiddenFields,
