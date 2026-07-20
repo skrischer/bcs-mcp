@@ -230,6 +230,74 @@ describe("auth", () => {
       expect(cookieHeader).toContain("CSRF_Token=csrftoken456");
     });
 
+    it("uses the server clock to generate the TOTP code when the local clock is skewed", async () => {
+      vi.useFakeTimers();
+      // Local clock is wrong; server clock is 5 minutes ahead.
+      const localNow = new Date("2026-07-20T12:00:00.000Z");
+      vi.setSystemTime(localNow);
+      const serverNow = new Date(localNow.getTime() + 5 * 60_000);
+
+      const serverTimeResponse = new Response(null, {
+        status: 200,
+        headers: { date: serverNow.toUTCString() },
+      });
+
+      const mockFetch = vi
+        .fn<FetchFn>()
+        .mockResolvedValueOnce(makeLoginPageResponse())
+        .mockResolvedValueOnce(makeLoginSuccessResponse())
+        .mockResolvedValueOnce(makeProbeRedirectToTotp())
+        .mockResolvedValueOnce(makeTotpChallengePageResponse())
+        .mockResolvedValueOnce(serverTimeResponse)
+        .mockResolvedValueOnce(makeTotpSuccessResponse());
+      vi.stubGlobal("fetch", mockFetch);
+
+      const result = await login({
+        ...mockConfig,
+        BCS_TOTP_SECRET: TEST_TOTP_SECRET,
+      });
+      expect(result.sessionId).toBe("abc123");
+
+      const totpInit = mockFetch.mock.calls[5]![1] as RequestInit;
+      const params = new URLSearchParams(totpInit.body as string);
+      const totp = new TOTP({ secret: Secret.fromBase32(TEST_TOTP_SECRET) });
+      // Code must match the SERVER time, not the skewed local time.
+      expect(params.get("totpVerificationCode")).toBe(
+        totp.generate({ timestamp: serverNow.getTime() }),
+      );
+      expect(params.get("totpVerificationCode")).not.toBe(
+        totp.generate({ timestamp: localNow.getTime() }),
+      );
+
+      vi.useRealTimers();
+    });
+
+    it("falls back to local time when the server sends no Date header", async () => {
+      const noDateResponse = new Response(null, { status: 200 });
+      const mockFetch = vi
+        .fn<FetchFn>()
+        .mockResolvedValueOnce(makeLoginPageResponse())
+        .mockResolvedValueOnce(makeLoginSuccessResponse())
+        .mockResolvedValueOnce(makeProbeRedirectToTotp())
+        .mockResolvedValueOnce(makeTotpChallengePageResponse())
+        .mockResolvedValueOnce(noDateResponse)
+        .mockResolvedValueOnce(makeTotpSuccessResponse());
+      vi.stubGlobal("fetch", mockFetch);
+
+      const result = await login({
+        ...mockConfig,
+        BCS_TOTP_SECRET: TEST_TOTP_SECRET,
+      });
+      expect(result.sessionId).toBe("abc123");
+
+      const totpInit = mockFetch.mock.calls[5]![1] as RequestInit;
+      const params = new URLSearchParams(totpInit.body as string);
+      const expectedCode = new TOTP({
+        secret: Secret.fromBase32(TEST_TOTP_SECRET),
+      }).generate();
+      expect(params.get("totpVerificationCode")).toBe(expectedCode);
+    });
+
     it("throws when 2FA is required but BCS_TOTP_SECRET is not set", async () => {
       const mockFetch = vi
         .fn<FetchFn>()

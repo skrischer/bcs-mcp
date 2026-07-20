@@ -163,12 +163,23 @@ function detectTotpChallenge(
 }
 
 async function getServerTimeOffset(baseUrl: string): Promise<number> {
-  const before = Date.now();
-  const res = await fetch(`${baseUrl}/bcs/login`, { method: "HEAD" });
-  const after = Date.now();
-  const serverTime = new Date(res.headers.get("date") ?? "").getTime();
-  const localTime = (before + after) / 2;
-  return serverTime - localTime;
+  try {
+    const before = Date.now();
+    const res = await fetch(`${baseUrl}/bcs/login`, { method: "HEAD" });
+    const after = Date.now();
+    const serverTime = new Date(res.headers.get("date") ?? "").getTime();
+    if (Number.isNaN(serverTime)) {
+      log("auth", "Server time unavailable (no Date header), using local time");
+      return 0;
+    }
+    const localTime = (before + after) / 2;
+    return serverTime - localTime;
+  } catch (err) {
+    log("auth", "Server time probe failed, using local time", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
 }
 
 function generateTotpCode(secret: string, serverTimeMs: number): string {
