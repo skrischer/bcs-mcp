@@ -106,6 +106,24 @@ function parseCsrfToken(setCookies: string[]): string | null {
   return setCookies.join(";").match(/CSRF_Token=([^;]+)/)?.[1] ?? null;
 }
 
+// BCS renders the login form with a session-specific action URL
+// (e.g. /bcs/login/*/display?is_Ajax_Login=false). Some BCS versions reject a
+// POST to the bare /bcs/login and silently redirect back to the login page
+// without setting CSRF_Token. Extract the real action; fall back to /bcs/login
+// for versions that render no action (keeps existing behaviour working).
+function parseLoginFormAction(html: string, baseUrl: string): string {
+  const fallback = `${baseUrl}/bcs/login`;
+  const root = parseHtml(html);
+  const loginForm = root
+    .querySelectorAll("form")
+    .find((f) => f.querySelector('input[type="password"]') !== null);
+  const action = loginForm?.getAttribute("action");
+  if (!action) return fallback;
+  return action.startsWith("http")
+    ? action
+    : `${baseUrl}${action.startsWith("/") ? action : `/${action}`}`;
+}
+
 function detectTotpChallenge(
   html: string,
   baseUrl: string,
@@ -211,6 +229,8 @@ export async function login(config: BcsConfig): Promise<LoginResult> {
     preHtml,
   );
   const pagetimestamp = timestampMatch?.[1] ?? "";
+  const loginPostUrl = parseLoginFormAction(preHtml, config.BCS_URL);
+  log("auth", "Resolved login form action", { url: loginPostUrl });
 
   const body = new URLSearchParams({
     user: config.BCS_USERNAME,
@@ -220,7 +240,7 @@ export async function login(config: BcsConfig): Promise<LoginResult> {
     ...(pagetimestamp ? { pagetimestamp } : {}),
   });
 
-  const response = await fetch(`${config.BCS_URL}/bcs/login`, {
+  const response = await fetch(loginPostUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",

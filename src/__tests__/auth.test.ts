@@ -17,8 +17,15 @@ const mockConfig: BcsConfig = {
 
 const TEST_TOTP_SECRET = "JBSWY3DPEHPK3PXP";
 
+const LOGIN_ACTION = "/bcs/login/*/display?is_Ajax_Login=false";
+
 function makeLoginPageResponse(): Response {
-  const html = '<input name="pagetimestamp" type="hidden" value="123456">';
+  const html = `
+    <form method="post" action="${LOGIN_ACTION}">
+      <input name="pagetimestamp" type="hidden" value="123456">
+      <input type="password" name="pwd">
+      <input type="submit" name="login" value="Anmelden">
+    </form>`;
   return new Response(html, {
     status: 200,
     headers: {
@@ -136,6 +143,31 @@ describe("auth", () => {
       expect(result.csrfToken).toBe("csrftoken456");
 
       expect(mockFetch).toHaveBeenCalledTimes(3);
+
+      // Password POST must target the form's session-specific action URL,
+      // not the bare /bcs/login (root cause of issue #4).
+      const postCall = mockFetch.mock.calls[1];
+      expect(postCall![0]).toBe(`${mockConfig.BCS_URL}${LOGIN_ACTION}`);
+      expect((postCall![1] as RequestInit).method).toBe("POST");
+    });
+
+    it("falls back to /bcs/login when the page has no form action", async () => {
+      const noFormPage = new Response(
+        '<input name="pagetimestamp" type="hidden" value="123456">',
+        { status: 200, headers: { "set-cookie": "JSESSIONID=initial123" } },
+      );
+      const mockFetch = vi
+        .fn<FetchFn>()
+        .mockResolvedValueOnce(noFormPage)
+        .mockResolvedValueOnce(makeLoginSuccessResponse())
+        .mockResolvedValueOnce(makeProbeNoTotpResponse());
+      vi.stubGlobal("fetch", mockFetch);
+
+      const result = await login(mockConfig);
+      expect(result.sessionId).toBe("abc123");
+
+      const postCall = mockFetch.mock.calls[1];
+      expect(postCall![0]).toBe(`${mockConfig.BCS_URL}/bcs/login`);
     });
 
     it("throws when no initial JSESSIONID from login page", async () => {
