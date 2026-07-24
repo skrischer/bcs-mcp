@@ -65,6 +65,7 @@ regardless of the working directory the MCP client launches the server from.
 | Coerce empty/whitespace `BCS_TOTP_SECRET` to `undefined` via a `zod` preprocess wrapping `z.string().min(1).optional()` | 2FA is optional; `BCS_TOTP_SECRET=` (empty) is a common `.env` pattern and currently trips `min(1)`; coercion is more forgiving than requiring users to delete the line | 2026-07-24 |
 | Resolve `.env` with `resolve(dirname(fileURLToPath(import.meta.url)), "../.env")` and load via `dotenv.config({ path })`, not `import "dotenv/config"` | Runtime entry is `dist/index.js`, so `../.env` is the project root; `import "dotenv/config"` resolves against CWD, which the MCP client does not control | 2026-07-24 |
 | Keep `dotenv`'s default no-override behavior (do not pass `override: true`) | The MCP client's `env` block must win over `.env` (documented in README) | 2026-07-24 |
+| Extract the `.env`-path derivation into a **pure function** taking `import.meta.url` and returning the resolved path; `index.ts` calls it before importing config-reading modules, and the test exercises the function directly | `index.ts` has top-level startup side effects and no tests; a pure helper makes the path derivation unit-testable without triggering server startup (mirrors the existing `SESSION_FILE` pattern in `auth.ts`) | 2026-07-24 |
 | Do NOT add speculative `User-Agent`/`Referer` headers | Verified unnecessary on our instance during the #4 investigation; constitution forbids handling impossible/unproven scenarios | 2026-07-24 |
 
 ## Tracking
@@ -78,8 +79,9 @@ regardless of the working directory the MCP client launches the server from.
 - [ ] Unit test: `getConfig()` returns config with `BCS_TOTP_SECRET` undefined
       when the env var is `""` or whitespace, and still throws for a genuinely
       missing required var (e.g. `BCS_URL`).
-- [ ] Unit/behavioral test: `.env` is resolved from the project root — the path
-      passed to `dotenv.config` derives from `import.meta.url`, not CWD.
+- [ ] Unit test: the pure `.env`-path function, given a representative
+      `import.meta.url`, returns the project-root `.env` path (derived from the
+      module location, not CWD).
 - [ ] Behavioral check: a non-empty `BCS_TOTP_SECRET` still enables the 2FA path
       unchanged (no regression to existing TOTP tests).
 
