@@ -37,9 +37,11 @@ deduplication — without touching production code.
 
 ## Constraints
 
-- Test framework is vitest; `fetch` is stubbed via
-  `vi.stubGlobal("fetch", vi.fn<FetchFn>())` with chained `.mockResolvedValueOnce()`
-  for sequential HTTP responses (`docs/constitution.md`, `CLAUDE.md` Testing).
+- Test framework is vitest. The booking test files mock the auth module
+  directly — `vi.mock("../auth.js")` with `authenticatedFetch = vi.fn()` and
+  chained `.mockResolvedValueOnce()` for the sequential HTTP responses — not the
+  global `fetch` stub used in `auth.test.ts`. Follow the existing per-file
+  pattern (`docs/constitution.md`, `CLAUDE.md` Testing).
 - Match BCS field names verbatim, including the `attandence` misspelling and the
   `$new$`/`recordType` conventions (`CLAUDE.md`).
 - No `any`; ESM with `.js` imports; strict TypeScript.
@@ -60,6 +62,8 @@ deduplication — without touching production code.
 | Extend the existing dedicated test files (`api.bookEffort.test.ts`, `api.deleteEffort.test.ts`) rather than new files | Mirrors the established one-file-per-operation test layout | 2026-07-26 |
 | Path B fixture = AJAX tree-expand response whose task row carries a saved `recordType=effort` record, forcing the `$new$` `unsavedeffort` append path | This is exactly the branch `bookEffort` takes for occupied task rows (Path B), the untested one (Path A is already tested) | 2026-07-26 |
 | Dedup assertion = the POST body contains exactly one new effort entry when page HTML and AJAX response overlap | Directly exercises the dedup filter both `bookEffort` and `deleteEffort` apply (the CLAUDE.md gotcha) | 2026-07-26 |
+| Assert dedup on a field NOT rewritten by `body.set()` (e.g. `recordType`, `recordOid`, or `effortTargetOid`), never on `effortExpense_*`/`description` | `body.set()` collapses duplicate keys automatically, so asserting a set-field would pass even with the dedup filter removed (false negative). The test must fail if the filter is deleted | 2026-07-26 |
+| Match the Path B `$new$` row by iterating entries for the `unsavedeffort` value, not by a fixed key | The `$new$` OID embeds `Date.now()` and is non-deterministic | 2026-07-26 |
 
 ## Tracking
 
