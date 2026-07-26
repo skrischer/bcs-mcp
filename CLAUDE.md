@@ -2,6 +2,24 @@
 
 MCP server for Projektron BCS time tracking.
 
+## Loopkit foundation
+
+This project runs the loopkit spec-driven loops (`/loopkit:plan`,
+`/loopkit:implement`, `/loopkit:ship`). Foundation docs:
+
+- @docs/vision.md — what/why (always in context)
+- @docs/constitution.md — binding rules + tech stack (always in context)
+
+On-demand references — read when relevant, **not** auto-loaded (token budget):
+`docs/prior-art.md`, `docs/architecture.md`, `docs/roadmap.md`,
+`docs/workflow.md`, `docs/release.md`.
+
+**Autonomy (within the loopkit skills):** autonomous commits, pushes, PR
+creation and merges, dependency installs, and `.env` edits are explicitly
+granted here, overriding stricter global user rules. Hard limits live in
+`.claude/settings.json` (deny: `rm -rf`, force-push, hard reset, destructive
+resets).
+
 ## Commands
 
 ```bash
@@ -148,3 +166,10 @@ Fetched from `/bcs/mybcs/vacation/display` with query params `userbudgets,Choice
 - ESM throughout (import/export, `.js` extensions in imports)
 - Conventional Commits: `feat:`, `fix:`, `chore:`, `docs:`
 - Minimal code, no over-engineering
+
+# Compact Instructions
+
+When compacting, preserve the active milestone target and the unblocked issue
+frontier — both re-derivable from GitHub issues/milestones and the project
+board. Keep which roadmap phase / milestone is in flight and what is blocked;
+drop transcript detail.

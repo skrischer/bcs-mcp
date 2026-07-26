@@ -91,6 +91,58 @@ describe("deleteEffort", () => {
     expect(postedBody().get(`${PSP},effortExpense,listeditoid_${EFFORT}.effortExpense_hour`)).toBe("");
   });
 
+  it("submits the cleared effort exactly once when page and AJAX fields overlap", async () => {
+    // Day page HTML that ALREADY carries the effort row's fields — BCS remembers
+    // tree expansion server-side, so the day page can ship the same effort
+    // fields that expandTreeNode returns again. This is the overlap the dedup
+    // filter exists to collapse.
+    const DAY_HTML_WITH_EFFORT = `<form>
+      <input type="hidden" name="pagetimestamp" value="1">
+      <input type="hidden" name="${PSP},recordType,listeditoid_${PROJ}.recordType" value="project">
+      <input type="text" name="${PSP},effortExpense,listeditoid_${PROJ}.effortExpense_hour" value="0">
+      <input type="text" name="${PSP},effortExpense,listeditoid_${PROJ}.effortExpense_minute" value="30">
+      <input type="hidden" name="${PSP},recordType,listeditoid_${EFFORT}.recordType" value="effort">
+      <input type="hidden" name="${PSP},recordOid,listeditoid_${EFFORT}.recordOid" value="${EFFORT}">
+      <input type="hidden" name="${PSP},effortTargetOid,listeditoid_${EFFORT}.effortTargetOid" value="${TASK}">
+      <input type="text" name="${PSP},effortExpense,listeditoid_${EFFORT}.effortExpense_hour" value="0">
+      <input type="text" name="${PSP},effortExpense,listeditoid_${EFFORT}.effortExpense_minute" value="30">
+      <input type="text" name="${PSP},description,listeditoid_${EFFORT}.description" value="work">
+    </form>`;
+
+    authenticatedFetch
+      .mockResolvedValueOnce(new Response(DAY_HTML_WITH_EFFORT, { status: 200 }))
+      .mockResolvedValueOnce(new Response(EXPAND_JSON, { status: 201 }))
+      .mockResolvedValueOnce(new Response(CLEARED_RESPONSE, { status: 200 }));
+
+    const { deleteEffort } = await import("../api.js");
+    const result = await deleteEffort({
+      date: "2026-07-08",
+      projectOid: PROJ,
+      taskLineOid: EFFORT,
+    });
+
+    expect(result.success).toBe(true);
+    const body = postedBody();
+
+    // Assert on recordType / recordOid / effortTargetOid — fields body.set()
+    // never rewrites (delete only clears effortExpense_*/effortStart_*/
+    // effortEnd_*/description). If the dedup filter were removed, the page copy +
+    // the AJAX copy would both survive and these getAll() calls would return two
+    // entries. The cleared fields would be a false-negative assertion because
+    // body.set() collapses their duplicates automatically.
+    expect(
+      body.getAll(`${PSP},recordType,listeditoid_${EFFORT}.recordType`),
+    ).toEqual(["effort"]);
+    expect(
+      body.getAll(`${PSP},recordOid,listeditoid_${EFFORT}.recordOid`),
+    ).toEqual([EFFORT]);
+    expect(
+      body.getAll(
+        `${PSP},effortTargetOid,listeditoid_${EFFORT}.effortTargetOid`,
+      ),
+    ).toEqual([TASK]);
+  });
+
   it("throws when the OID matches neither a row nor an effortTargetOid", async () => {
     mockFlow();
     const { deleteEffort } = await import("../api.js");

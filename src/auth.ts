@@ -15,7 +15,10 @@ const envSchema = z.object({
   BCS_USERNAME: z.string().min(1),
   BCS_PASSWORD: z.string().min(1),
   BCS_USER_OID: z.string().min(1),
-  BCS_TOTP_SECRET: z.string().min(1).optional(),
+  BCS_TOTP_SECRET: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
 });
 
 export type BcsConfig = z.infer<typeof envSchema>;
@@ -106,6 +109,24 @@ function parseCsrfToken(setCookies: string[]): string | null {
   return setCookies.join(";").match(/CSRF_Token=([^;]+)/)?.[1] ?? null;
 }
 
+// BCS renders the login form with a session-specific action URL
+// (e.g. /bcs/login/*/display?is_Ajax_Login=false). Some BCS versions reject a
+// POST to the bare /bcs/login and silently redirect back to the login page
+// without setting CSRF_Token. Extract the real action; fall back to /bcs/login
+// for versions that render no action (keeps existing behaviour working).
+function parseLoginFormAction(html: string, baseUrl: string): string {
+  const fallback = `${baseUrl}/bcs/login`;
+  const root = parseHtml(html);
+  const loginForm = root
+    .querySelectorAll("form")
+    .find((f) => f.querySelector('input[type="password"]') !== null);
+  const action = loginForm?.getAttribute("action");
+  if (!action) return fallback;
+  return action.startsWith("http")
+    ? action
+    : `${baseUrl}${action.startsWith("/") ? action : `/${action}`}`;
+}
+
 function detectTotpChallenge(
   html: string,
   baseUrl: string,
@@ -162,11 +183,31 @@ function detectTotpChallenge(
   return null;
 }
 
-function generateTotpCode(secret: string): string {
+async function getServerTimeOffset(baseUrl: string): Promise<number> {
+  try {
+    const before = Date.now();
+    const res = await fetch(`${baseUrl}/bcs/login`, { method: "HEAD" });
+    const after = Date.now();
+    const serverTime = new Date(res.headers.get("date") ?? "").getTime();
+    if (Number.isNaN(serverTime)) {
+      log("auth", "Server time unavailable (no Date header), using local time");
+      return 0;
+    }
+    const localTime = (before + after) / 2;
+    return serverTime - localTime;
+  } catch (err) {
+    log("auth", "Server time probe failed, using local time", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
+}
+
+function generateTotpCode(secret: string, serverTimeMs: number): string {
   const totp = new TOTP({
     secret: Secret.fromBase32(secret.replace(/\s+/g, "").toUpperCase()),
   });
-  return totp.generate();
+  return totp.generate({ timestamp: serverTimeMs });
 }
 
 export async function login(config: BcsConfig): Promise<LoginResult> {
@@ -191,6 +232,8 @@ export async function login(config: BcsConfig): Promise<LoginResult> {
     preHtml,
   );
   const pagetimestamp = timestampMatch?.[1] ?? "";
+  const loginPostUrl = parseLoginFormAction(preHtml, config.BCS_URL);
+  log("auth", "Resolved login form action", { url: loginPostUrl });
 
   const body = new URLSearchParams({
     user: config.BCS_USERNAME,
@@ -200,7 +243,7 @@ export async function login(config: BcsConfig): Promise<LoginResult> {
     ...(pagetimestamp ? { pagetimestamp } : {}),
   });
 
-  const response = await fetch(`${config.BCS_URL}/bcs/login`, {
+  const response = await fetch(loginPostUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -275,8 +318,13 @@ export async function login(config: BcsConfig): Promise<LoginResult> {
     hiddenFields: Object.keys(challenge.hiddenFields).join(","),
   });
 
-  const code = generateTotpCode(config.BCS_TOTP_SECRET);
-  log("auth", "TOTP code generated", { length: code.length });
+  const serverOffsetMs = await getServerTimeOffset(config.BCS_URL);
+  const serverTimeMs = Date.now() + serverOffsetMs;
+  const code = generateTotpCode(config.BCS_TOTP_SECRET, serverTimeMs);
+  log("auth", "TOTP code generated", {
+    length: code.length,
+    serverOffsetSec: Math.round(serverOffsetMs / 1000),
+  });
 
   const totpBody = new URLSearchParams({
     ...challenge.hiddenFields,

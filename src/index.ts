@@ -1,5 +1,8 @@
-import "dotenv/config";
+import { config as loadEnv } from "dotenv";
+import { resolveEnvPath } from "./env-path.js";
 import { initLogFile, closeLogFile, log, setStdioMode } from "./logger.js";
+
+loadEnv({ path: resolveEnvPath(import.meta.url) });
 
 const useStdio = process.argv.includes("--stdio");
 
