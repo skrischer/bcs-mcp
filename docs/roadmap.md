@@ -12,7 +12,7 @@
 | Phase | Name | Spec | Milestone |
 |---|---|---|---|
 | 1 | Auth & config robustness | [spec](specs/spec-auth-config-robustness.md) | [#1](https://github.com/skrischer/bcs-mcp/milestone/1) |
-| 2 | Test coverage for booking/parsing | — | — |
+| 2 | Test coverage for booking/parsing | [spec](specs/spec-booking-test-coverage.md) | [#2](https://github.com/skrischer/bcs-mcp/milestone/2) |
 | 3 | Task → project mapping (QoL) | — | — |
 | 4 | Natural-language booking UX | — | — |
 
