@@ -178,6 +178,54 @@ describe("bookEffort Path B (existing-effort append)", () => {
   });
 });
 
+describe("bookEffort page-vs-AJAX field dedup", () => {
+  beforeEach(() => authenticatedFetch.mockReset());
+
+  // Day page HTML that ALREADY carries the (empty) task row's fields — BCS
+  // remembers tree expansion server-side, so the day page can ship the same
+  // task fields that expandTreeNode returns again. This is the overlap the
+  // dedup filter exists to collapse.
+  const DAY_HTML_WITH_TASK = `<form>
+    <input type="hidden" name="pagetimestamp" value="1">
+    <input type="hidden" name="${PSP},recordType,listeditoid_${PROJ}.recordType" value="project">
+    <input type="text" name="${PSP},effortExpense,listeditoid_${PROJ}.effortExpense_hour" value="0">
+    <input type="text" name="${PSP},effortExpense,listeditoid_${PROJ}.effortExpense_minute" value="00">
+    <input type="hidden" name="${PSP},recordType,listeditoid_${TASK}.recordType" value="neweffort">
+    <input type="hidden" name="${PSP},effortTargetOid,listeditoid_${TASK}.effortTargetOid" value="${TASK}">
+    <input type="text" name="${PSP},effortExpense,listeditoid_${TASK}.effortExpense_hour" value="0">
+    <input type="text" name="${PSP},effortExpense,listeditoid_${TASK}.effortExpense_minute" value="00">
+    <input type="text" name="${PSP},description,listeditoid_${TASK}.description" value="">
+  </form>`;
+
+  it("submits the effort exactly once when page and AJAX fields overlap", async () => {
+    authenticatedFetch
+      .mockResolvedValueOnce(new Response(DAY_HTML_WITH_TASK, { status: 200 }))
+      .mockResolvedValueOnce(new Response(EXPAND_JSON, { status: 201 }))
+      .mockResolvedValueOnce(new Response(OK_RESPONSE, { status: 200 }));
+
+    const { bookEffort } = await import("../api.js");
+    await bookEffort(params);
+
+    const [, options] = authenticatedFetch.mock.calls[2] as [
+      string,
+      { body: string },
+    ];
+    const body = new URLSearchParams(options.body);
+
+    // Assert on recordType / effortTargetOid — fields body.set() never rewrites
+    // for Path A (only effortExpense_*/description are set). If the dedup filter
+    // were removed, the page copy + the AJAX copy would both survive and these
+    // getAll() calls would return two entries. body.set() would mask a duplicate
+    // effortExpense field, so those would be a false-negative assertion.
+    expect(
+      body.getAll(`${PSP},recordType,listeditoid_${TASK}.recordType`),
+    ).toEqual(["neweffort"]);
+    expect(
+      body.getAll(`${PSP},effortTargetOid,listeditoid_${TASK}.effortTargetOid`),
+    ).toEqual([TASK]);
+  });
+});
+
 describe("parseBcsErrors", () => {
   it("extracts messages from a .messagedisplay.errors block", async () => {
     const { parseBcsErrors } = await import("../api.js");
