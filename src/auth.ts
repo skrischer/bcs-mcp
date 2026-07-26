@@ -15,7 +15,10 @@ const envSchema = z.object({
   BCS_USERNAME: z.string().min(1),
   BCS_PASSWORD: z.string().min(1),
   BCS_USER_OID: z.string().min(1),
-  BCS_TOTP_SECRET: z.string().min(1).optional(),
+  BCS_TOTP_SECRET: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
 });
 
 export type BcsConfig = z.infer<typeof envSchema>;

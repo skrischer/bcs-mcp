@@ -127,6 +127,45 @@ describe("auth", () => {
       expect(config.BCS_URL).toBe(mockConfig.BCS_URL);
       expect(config.BCS_USERNAME).toBe(mockConfig.BCS_USERNAME);
     });
+
+    it("treats an empty BCS_TOTP_SECRET as unset", () => {
+      process.env["BCS_URL"] = mockConfig.BCS_URL;
+      process.env["BCS_USERNAME"] = mockConfig.BCS_USERNAME;
+      process.env["BCS_PASSWORD"] = mockConfig.BCS_PASSWORD;
+      process.env["BCS_USER_OID"] = mockConfig.BCS_USER_OID;
+      process.env["BCS_TOTP_SECRET"] = "";
+
+      const config = getConfig();
+      expect(config.BCS_TOTP_SECRET).toBeUndefined();
+
+      delete process.env["BCS_TOTP_SECRET"];
+    });
+
+    it("treats a whitespace-only BCS_TOTP_SECRET as unset", () => {
+      process.env["BCS_URL"] = mockConfig.BCS_URL;
+      process.env["BCS_USERNAME"] = mockConfig.BCS_USERNAME;
+      process.env["BCS_PASSWORD"] = mockConfig.BCS_PASSWORD;
+      process.env["BCS_USER_OID"] = mockConfig.BCS_USER_OID;
+      process.env["BCS_TOTP_SECRET"] = "   ";
+
+      const config = getConfig();
+      expect(config.BCS_TOTP_SECRET).toBeUndefined();
+
+      delete process.env["BCS_TOTP_SECRET"];
+    });
+
+    it("passes a non-empty BCS_TOTP_SECRET through unchanged", () => {
+      process.env["BCS_URL"] = mockConfig.BCS_URL;
+      process.env["BCS_USERNAME"] = mockConfig.BCS_USERNAME;
+      process.env["BCS_PASSWORD"] = mockConfig.BCS_PASSWORD;
+      process.env["BCS_USER_OID"] = mockConfig.BCS_USER_OID;
+      process.env["BCS_TOTP_SECRET"] = TEST_TOTP_SECRET;
+
+      const config = getConfig();
+      expect(config.BCS_TOTP_SECRET).toBe(TEST_TOTP_SECRET);
+
+      delete process.env["BCS_TOTP_SECRET"];
+    });
   });
 
   describe("login", () => {
