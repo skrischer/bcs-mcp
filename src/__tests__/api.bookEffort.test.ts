@@ -29,6 +29,7 @@ const DAY_HTML = `<form>
 const EXPAND_JSON = JSON.stringify({
   html:
     `<input type="hidden" name="${PSP},recordType,listeditoid_${TASK}.recordType" value="neweffort">` +
+    `<input type="hidden" name="${PSP},effortTargetOid,listeditoid_${TASK}.effortTargetOid" value="${TASK}">` +
     `<input type="text" name="${PSP},effortExpense,listeditoid_${TASK}.effortExpense_hour" value="0">` +
     `<input type="text" name="${PSP},effortExpense,listeditoid_${TASK}.effortExpense_minute" value="00">` +
     `<input type="text" name="${PSP},description,listeditoid_${TASK}.description" value="">`,
