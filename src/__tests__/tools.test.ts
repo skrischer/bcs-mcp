@@ -5,6 +5,7 @@ vi.mock("../api.js", () => ({
   getWeekSummary: vi.fn(),
   getTasksForProject: vi.fn(),
   bookEffort: vi.fn(),
+  editEffort: vi.fn(),
   deleteEffort: vi.fn(),
   setAttendance: vi.fn(),
   getOvertimeBalance: vi.fn(),
@@ -16,6 +17,7 @@ import {
   getWeekSummary,
   getTasksForProject,
   bookEffort,
+  editEffort,
   deleteEffort,
   setAttendance,
   getOvertimeBalance,
@@ -34,6 +36,7 @@ const mockGetDaySummary = vi.mocked(getDaySummary);
 const mockGetWeekSummary = vi.mocked(getWeekSummary);
 const mockGetTasksForProject = vi.mocked(getTasksForProject);
 const mockBookEffort = vi.mocked(bookEffort);
+const mockEditEffort = vi.mocked(editEffort);
 const mockDeleteEffort = vi.mocked(deleteEffort);
 const mockSetAttendance = vi.mocked(setAttendance);
 const mockGetOvertimeBalance = vi.mocked(getOvertimeBalance);
@@ -91,13 +94,14 @@ describe("tools", () => {
     registerTools(mockServer as unknown as Parameters<typeof registerTools>[0]);
   });
 
-  it("registers all 8 tools", () => {
-    expect(mockServer.tools).toHaveLength(8);
+  it("registers all 9 tools", () => {
+    expect(mockServer.tools).toHaveLength(9);
     const names = mockServer.tools.map((t) => t.name);
     expect(names).toContain("bcs_get_week_summary");
     expect(names).toContain("bcs_get_day_summary");
     expect(names).toContain("bcs_get_tasks");
     expect(names).toContain("bcs_book_effort");
+    expect(names).toContain("bcs_edit_effort");
     expect(names).toContain("bcs_delete_effort");
     expect(names).toContain("bcs_set_attendance");
     expect(names).toContain("bcs_get_overtime_balance");
@@ -276,6 +280,76 @@ describe("tools", () => {
       expect(data.projects).toEqual([
         { projectOid: "PROJ1", name: "Akquise", hours: 5, minutes: 0 },
       ]);
+    });
+  });
+
+  describe("bcs_edit_effort", () => {
+    it("edits effort with hours, minutes, and description and returns confirmation", async () => {
+      const projects: ProjectAggregate[] = [
+        { projectOid: "PROJ1", name: "Akquise", hours: 2, minutes: 30 },
+      ];
+      mockEditEffort.mockResolvedValue({ success: true, projects });
+
+      const handler = getToolHandler(mockServer.tools, "bcs_edit_effort");
+      const result = await handler({
+        date: "2026-04-10",
+        projectOid: "PROJ1",
+        taskLineOid: "TASK1",
+        hours: 2,
+        minutes: 30,
+        description: "Updated description",
+      });
+      const data = JSON.parse(result.content[0]?.text ?? "{}") as {
+        success: boolean;
+        projects: ProjectAggregate[];
+      };
+
+      expect(mockEditEffort).toHaveBeenCalledWith({
+        date: "2026-04-10",
+        projectOid: "PROJ1",
+        taskLineOid: "TASK1",
+        hours: 2,
+        minutes: 30,
+        description: "Updated description",
+      });
+      expect(data.success).toBe(true);
+      expect(data.projects).toEqual(projects);
+    });
+
+    it("edits effort with only a description, leaving hours/minutes undefined", async () => {
+      const projects: ProjectAggregate[] = [
+        { projectOid: "PROJ1", name: "Akquise", hours: 2, minutes: 30 },
+      ];
+      mockEditEffort.mockResolvedValue({ success: true, projects });
+
+      const handler = getToolHandler(mockServer.tools, "bcs_edit_effort");
+      await handler({
+        date: "2026-04-10",
+        projectOid: "PROJ1",
+        taskLineOid: "TASK1",
+        description: "Only text changed",
+      });
+
+      expect(mockEditEffort).toHaveBeenCalledWith({
+        date: "2026-04-10",
+        projectOid: "PROJ1",
+        taskLineOid: "TASK1",
+        hours: undefined,
+        minutes: undefined,
+        description: "Only text changed",
+      });
+    });
+
+    it("rejects a call with no hours, minutes, or description", async () => {
+      const handler = getToolHandler(mockServer.tools, "bcs_edit_effort");
+      await expect(
+        handler({
+          date: "2026-04-10",
+          projectOid: "PROJ1",
+          taskLineOid: "TASK1",
+        }),
+      ).rejects.toThrow();
+      expect(mockEditEffort).not.toHaveBeenCalled();
     });
   });
 
