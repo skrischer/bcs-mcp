@@ -4,7 +4,7 @@ MCP server for [Projektron BCS](https://www.projektron.de/) time tracking. Conne
 
 ## What it does
 
-BCS has no public API — it uses server-side rendered HTML forms. This server scrapes and submits those forms, exposing 8 MCP tools:
+BCS has no public API — it uses server-side rendered HTML forms. This server scrapes and submits those forms, exposing 9 MCP tools:
 
 | Tool | Description |
 |------|-------------|
@@ -12,6 +12,7 @@ BCS has no public API — it uses server-side rendered HTML forms. This server s
 | `bcs_get_day_summary` | Day detail: attendance, projects, booked/unbooked hours, day type (workday/holiday/absence) |
 | `bcs_get_tasks` | List bookable tasks for a project |
 | `bcs_book_effort` | Book time to a task (always creates a new entry) |
+| `bcs_edit_effort` | Edit an existing booked effort entry's time and/or description in place |
 | `bcs_delete_effort` | Delete a booked effort entry |
 | `bcs_set_attendance` | Set attendance times (start, end, pause) |
 | `bcs_get_overtime_balance` | Working time account: flexi-time balance, target vs actual hours |
