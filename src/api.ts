@@ -824,6 +824,15 @@ export async function editEffort(params: {
   const config = getConfig();
   const html = await fetchDayPage(params.date);
   const formFields = parseFormState(html);
+  const formMap = toFormMap(formFields);
+
+  const projectTypeKey = `${PSP_PREFIX},recordType,listeditoid_${params.projectOid}.recordType`;
+  if (formMap.get(projectTypeKey) !== "project") {
+    throw new Error(
+      `Project OID ${params.projectOid} not found. Available: ${getAvailableTaskOids(formMap).join(", ")}`,
+    );
+  }
+
   const initialProject = parseProjectAggregates(html).find(
     (p) => p.projectOid === params.projectOid,
   );
@@ -872,6 +881,24 @@ export async function editEffort(params: {
   const newHours = params.hours ?? currentHours;
   const newMinutes = params.minutes ?? currentMinutes;
   const newDescription = params.description ?? currentDescription;
+
+  // A row created via the BCS UI can carry an explicit start/end time range
+  // alongside its duration (bookEffort's own rows never set one). Changing
+  // the duration without also reconciling that range would leave BCS with an
+  // inconsistent entry, so reject rather than silently corrupt it.
+  if (newHours !== currentHours || newMinutes !== currentMinutes) {
+    const hasTimeRange = [
+      `${PSP_PREFIX},effortStart,listeditoid_${targetLineOid}.effortStart_hour`,
+      `${PSP_PREFIX},effortStart,listeditoid_${targetLineOid}.effortStart_minute`,
+      `${PSP_PREFIX},effortEnd,listeditoid_${targetLineOid}.effortEnd_hour`,
+      `${PSP_PREFIX},effortEnd,listeditoid_${targetLineOid}.effortEnd_minute`,
+    ].some((key) => (taskMap.get(key) ?? "").trim() !== "");
+    if (hasTimeRange) {
+      throw new Error(
+        `Task ${params.taskLineOid} has an explicit start/end time range that bcs_edit_effort does not maintain — changing the duration would leave the range inconsistent with it. Use bcs_delete_effort followed by bcs_book_effort instead.`,
+      );
+    }
+  }
 
   const taskFieldKeys = new Set(taskFields.map(([name]) => name));
   const filteredFields = formFields.filter(
@@ -927,6 +954,16 @@ export async function editEffort(params: {
 
   const bcsErrors = parseBcsErrors(responseHtml);
   const success = projectTotal === expectedTotal && bcsErrors.length === 0;
+
+  log("api:edit", "save POST response", {
+    status: response.status,
+    finalUrl: response.url,
+    redirected: response.redirected,
+    currentTotal: currentHours * 60 + currentMinutes,
+    expectedTotal,
+    projectTotal,
+    bcsErrors,
+  });
 
   const projects = parseProjectAggregates(responseHtml);
   let error: string | undefined;

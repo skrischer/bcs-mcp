@@ -112,7 +112,7 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     "bcs_edit_effort",
-    "Edit an existing booked effort entry's time and/or description. Use bcs_get_tasks to find the taskLineOid of the entry to edit. At least one of hours, minutes, or description must be given; omitted fields keep their current value.",
+    "Edit an existing booked effort entry's time and/or description. Use bcs_get_tasks to find the taskLineOid of the entry to edit. At least one of hours, minutes, or description must be given; omitted fields keep their current value. Rejected if the entry has an explicit start/end time range and the duration is changing — delete and rebook instead.",
     {
       date: z.string().describe("Date in YYYY-MM-DD format"),
       projectOid: z.string().describe("Project OID from bcs_get_day_summary"),
@@ -144,16 +144,6 @@ export function registerTools(server: McpServer): void {
         minutes,
         description,
       });
-      if (
-        hours === undefined &&
-        minutes === undefined &&
-        description === undefined
-      ) {
-        const msg =
-          "At least one of hours, minutes, or description must be provided";
-        log("tool:error", "bcs_edit_effort", msg);
-        throw new Error(msg);
-      }
       try {
         const result = await editEffort({
           date,

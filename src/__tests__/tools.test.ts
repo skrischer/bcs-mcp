@@ -340,7 +340,13 @@ describe("tools", () => {
       });
     });
 
-    it("rejects a call with no hours, minutes, or description", async () => {
+    it("propagates editEffort's validation error when no hours, minutes, or description are given", async () => {
+      mockEditEffort.mockRejectedValue(
+        new Error(
+          "editEffort requires at least one of hours, minutes, or description to update",
+        ),
+      );
+
       const handler = getToolHandler(mockServer.tools, "bcs_edit_effort");
       await expect(
         handler({
@@ -348,8 +354,15 @@ describe("tools", () => {
           projectOid: "PROJ1",
           taskLineOid: "TASK1",
         }),
-      ).rejects.toThrow();
-      expect(mockEditEffort).not.toHaveBeenCalled();
+      ).rejects.toThrow(/at least one/);
+      expect(mockEditEffort).toHaveBeenCalledWith({
+        date: "2026-04-10",
+        projectOid: "PROJ1",
+        taskLineOid: "TASK1",
+        hours: undefined,
+        minutes: undefined,
+        description: undefined,
+      });
     });
   });
 

@@ -148,7 +148,7 @@ Then ask Claude something like:
 ```
 src/index.ts   — Entry point (--stdio for stdio transport, default: HTTP)
 src/server.ts  — MCP session management and request routing
-src/tools.ts   — MCP tool definitions (8 tools, input schemas, response formatting)
+src/tools.ts   — MCP tool definitions (9 tools, input schemas, response formatting)
 src/api.ts     — BCS form-based API (HTML parsing, form submission)
 src/auth.ts    — BCS authentication (login, CSRF tokens, session persistence)
 ```

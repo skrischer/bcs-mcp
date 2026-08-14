@@ -35,6 +35,22 @@ const EXPAND_JSON = JSON.stringify({
     `<input type="text" name="${PSP},description,listeditoid_${EFFORT}.description" value="work">`,
 });
 
+// AJAX tree-expand: same effort row, but carrying an explicit start/end time
+// range (as a manually-entered BCS UI booking would) alongside its duration.
+const EXPAND_JSON_WITH_TIMERANGE = JSON.stringify({
+  html:
+    `<input type="hidden" name="${PSP},recordType,listeditoid_${EFFORT}.recordType" value="effort">` +
+    `<input type="hidden" name="${PSP},recordOid,listeditoid_${EFFORT}.recordOid" value="${EFFORT}">` +
+    `<input type="hidden" name="${PSP},effortTargetOid,listeditoid_${EFFORT}.effortTargetOid" value="${TASK}">` +
+    `<input type="text" name="${PSP},effortExpense,listeditoid_${EFFORT}.effortExpense_hour" value="0">` +
+    `<input type="text" name="${PSP},effortExpense,listeditoid_${EFFORT}.effortExpense_minute" value="30">` +
+    `<input type="text" name="${PSP},description,listeditoid_${EFFORT}.description" value="work">` +
+    `<input type="text" name="${PSP},effortStart,listeditoid_${EFFORT}.effortStart_hour" value="9">` +
+    `<input type="text" name="${PSP},effortStart,listeditoid_${EFFORT}.effortStart_minute" value="0">` +
+    `<input type="text" name="${PSP},effortEnd,listeditoid_${EFFORT}.effortEnd_hour" value="9">` +
+    `<input type="text" name="${PSP},effortEnd,listeditoid_${EFFORT}.effortEnd_minute" value="30">`,
+});
+
 // AJAX tree-expand: task has no booked effort yet -> recordType=neweffort.
 const EXPAND_JSON_EMPTY = JSON.stringify({
   html:
@@ -234,6 +250,51 @@ describe("editEffort", () => {
       editEffort({ date: "2026-07-08", projectOid: PROJ, taskLineOid: TASK }),
     ).rejects.toThrow(/at least one/);
     expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
+  it("throws when the projectOid is not a known project", async () => {
+    authenticatedFetch.mockReset();
+    authenticatedFetch.mockResolvedValueOnce(new Response(DAY_HTML, { status: 200 }));
+    const { editEffort } = await import("../api.js");
+    await expect(
+      editEffort({
+        date: "2026-07-08",
+        projectOid: "UNKNOWN_JProject",
+        taskLineOid: TASK,
+        hours: 1,
+      }),
+    ).rejects.toThrow(/not found/);
+    // Fails before the AJAX expand or any POST is attempted.
+    expect(authenticatedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a duration change when the row has an explicit start/end time range", async () => {
+    mockFlow(EXPAND_JSON_WITH_TIMERANGE, saveResponse("1", "15"));
+    const { editEffort } = await import("../api.js");
+    await expect(
+      editEffort({
+        date: "2026-07-08",
+        projectOid: PROJ,
+        taskLineOid: TASK,
+        hours: 1,
+        minutes: 15,
+      }),
+    ).rejects.toThrow(/time range/);
+    // Fails before the POST is attempted.
+    expect(authenticatedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows a description-only edit even when the row has an explicit start/end time range", async () => {
+    mockFlow(EXPAND_JSON_WITH_TIMERANGE, saveResponse("0", "30"));
+    const { editEffort } = await import("../api.js");
+    const result = await editEffort({
+      date: "2026-07-08",
+      projectOid: PROJ,
+      taskLineOid: TASK,
+      description: "only text changed",
+    });
+
+    expect(result.success).toBe(true);
   });
 
   it("throws when the OID matches neither a row nor an effortTargetOid", async () => {
