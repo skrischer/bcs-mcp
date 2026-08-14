@@ -746,6 +746,31 @@ export async function deleteEffort(params: {
     params.projectOid,
   );
 
+  // The project aggregate sums every task of the project on that day, so it
+  // only reaches 0 when the deleted row was the project's last effort. Capture
+  // the aggregate and the row's own effort up front and verify against the
+  // delta instead — same approach as editEffort.
+  const initialProject = parseProjectAggregates(html).find(
+    (p) => p.projectOid === params.projectOid,
+  );
+  const initialProjectTotal = initialProject
+    ? initialProject.hours * 60 + initialProject.minutes
+    : 0;
+  const deletedTotal =
+    (parseInt(
+      taskMap.get(
+        `${PSP_PREFIX},effortExpense,listeditoid_${targetLineOid}.effortExpense_hour`,
+      ) ?? "0",
+      10,
+    ) || 0) *
+      60 +
+    (parseInt(
+      taskMap.get(
+        `${PSP_PREFIX},effortExpense,listeditoid_${targetLineOid}.effortExpense_minute`,
+      ) ?? "0",
+      10,
+    ) || 0);
+
   const taskFieldKeys = new Set(taskFields.map(([name]) => name));
   const filteredFields = formFields.filter(
     ([name]) =>
@@ -793,12 +818,12 @@ export async function deleteEffort(params: {
   const responseMap = toFormMap(parseFormState(responseHtml));
   const afterHour = `${PSP_PREFIX},effortExpense,listeditoid_${params.projectOid}.effortExpense_hour`;
   const afterMin = `${PSP_PREFIX},effortExpense,listeditoid_${params.projectOid}.effortExpense_minute`;
-  const remaining =
+  const projectTotal =
     (parseInt(responseMap.get(afterHour) ?? "0", 10) || 0) * 60 +
     (parseInt(responseMap.get(afterMin) ?? "0", 10) || 0);
 
   return {
-    success: remaining === 0,
+    success: projectTotal === initialProjectTotal - deletedTotal,
     projects: parseProjectAggregates(responseHtml),
   };
 }

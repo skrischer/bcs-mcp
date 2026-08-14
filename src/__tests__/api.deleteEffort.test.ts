@@ -42,6 +42,52 @@ const CLEARED_RESPONSE = `<form>
   <input type="text" name="${PSP},effortExpense,listeditoid_${PROJ}.effortExpense_minute" value="00">
 </form>`;
 
+const TASK2 = "TASK2_JTask";
+const EFFORT2 = "EFF2_JEffort";
+
+// Day page where the project carries TWO efforts (0h30 + 1h30 = 2h00), so its
+// aggregate cannot reach 0 by deleting just one of them.
+const DAY_HTML_TWO_EFFORTS = `<form>
+  <input type="hidden" name="pagetimestamp" value="1">
+  <input type="hidden" name="${PSP},recordType,listeditoid_${PROJ}.recordType" value="project">
+  <input type="text" name="${PSP},effortExpense,listeditoid_${PROJ}.effortExpense_hour" value="2">
+  <input type="text" name="${PSP},effortExpense,listeditoid_${PROJ}.effortExpense_minute" value="00">
+</form>`;
+
+const EXPAND_JSON_TWO_EFFORTS = JSON.stringify({
+  html:
+    `<input type="hidden" name="${PSP},recordType,listeditoid_${EFFORT}.recordType" value="effort">` +
+    `<input type="hidden" name="${PSP},recordOid,listeditoid_${EFFORT}.recordOid" value="${EFFORT}">` +
+    `<input type="hidden" name="${PSP},effortTargetOid,listeditoid_${EFFORT}.effortTargetOid" value="${TASK}">` +
+    `<input type="text" name="${PSP},effortExpense,listeditoid_${EFFORT}.effortExpense_hour" value="0">` +
+    `<input type="text" name="${PSP},effortExpense,listeditoid_${EFFORT}.effortExpense_minute" value="30">` +
+    `<input type="text" name="${PSP},description,listeditoid_${EFFORT}.description" value="work">` +
+    `<input type="hidden" name="${PSP},recordType,listeditoid_${EFFORT2}.recordType" value="effort">` +
+    `<input type="hidden" name="${PSP},recordOid,listeditoid_${EFFORT2}.recordOid" value="${EFFORT2}">` +
+    `<input type="hidden" name="${PSP},effortTargetOid,listeditoid_${EFFORT2}.effortTargetOid" value="${TASK2}">` +
+    `<input type="text" name="${PSP},effortExpense,listeditoid_${EFFORT2}.effortExpense_hour" value="1">` +
+    `<input type="text" name="${PSP},effortExpense,listeditoid_${EFFORT2}.effortExpense_minute" value="30">` +
+    `<input type="text" name="${PSP},description,listeditoid_${EFFORT2}.description" value="other work">`,
+});
+
+function projectAggregateResponse(hour: string, minute: string): string {
+  return `<form>
+    <input type="hidden" name="${PSP},recordType,listeditoid_${PROJ}.recordType" value="project">
+    <input type="text" name="${PSP},effortExpense,listeditoid_${PROJ}.effortExpense_hour" value="${hour}">
+    <input type="text" name="${PSP},effortExpense,listeditoid_${PROJ}.effortExpense_minute" value="${minute}">
+  </form>`;
+}
+
+function mockFlowTwoEfforts(saveHtml: string): void {
+  authenticatedFetch.mockReset();
+  authenticatedFetch
+    .mockResolvedValueOnce(new Response(DAY_HTML_TWO_EFFORTS, { status: 200 }))
+    .mockResolvedValueOnce(
+      new Response(EXPAND_JSON_TWO_EFFORTS, { status: 201 }),
+    )
+    .mockResolvedValueOnce(new Response(saveHtml, { status: 200 }));
+}
+
 function mockFlow(): void {
   authenticatedFetch.mockReset();
   authenticatedFetch
@@ -141,6 +187,43 @@ describe("deleteEffort", () => {
         `${PSP},effortTargetOid,listeditoid_${EFFORT}.effortTargetOid`,
       ),
     ).toEqual([TASK]);
+  });
+
+  it("reports success when one of several efforts in the same project is deleted", async () => {
+    // The project keeps 1h30 from the second effort, so its aggregate never
+    // reaches 0 — which the old check mistook for a failed delete.
+    mockFlowTwoEfforts(projectAggregateResponse("1", "30"));
+    const { deleteEffort } = await import("../api.js");
+    const result = await deleteEffort({
+      date: "2026-07-08",
+      projectOid: PROJ,
+      taskLineOid: EFFORT,
+    });
+
+    expect(result.success).toBe(true);
+    const body = postedBody();
+    expect(
+      body.get(`${PSP},effortExpense,listeditoid_${EFFORT}.effortExpense_hour`),
+    ).toBe("");
+    // The untouched second effort still carries its value.
+    expect(
+      body.get(`${PSP},effortExpense,listeditoid_${EFFORT2}.effortExpense_hour`),
+    ).toBe("1");
+  });
+
+  it("reports failure when the project aggregate does not match the expected delta", async () => {
+    // The aggregate drops to 0 although only the 0h30 row was targeted — BCS
+    // cleared more than asked. Deliberately the case the old === 0 check read
+    // as success, so this pins the delta rather than just "not blanket true".
+    mockFlowTwoEfforts(projectAggregateResponse("0", "00"));
+    const { deleteEffort } = await import("../api.js");
+    const result = await deleteEffort({
+      date: "2026-07-08",
+      projectOid: PROJ,
+      taskLineOid: EFFORT,
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it("throws when the OID matches neither a row nor an effortTargetOid", async () => {
