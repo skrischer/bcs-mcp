@@ -212,8 +212,10 @@ describe("deleteEffort", () => {
   });
 
   it("reports failure when the project aggregate does not match the expected delta", async () => {
-    // BCS echoes back the unchanged 2h00 aggregate — the row was not cleared.
-    mockFlowTwoEfforts(projectAggregateResponse("2", "00"));
+    // The aggregate drops to 0 although only the 0h30 row was targeted — BCS
+    // cleared more than asked. Deliberately the case the old === 0 check read
+    // as success, so this pins the delta rather than just "not blanket true".
+    mockFlowTwoEfforts(projectAggregateResponse("0", "00"));
     const { deleteEffort } = await import("../api.js");
     const result = await deleteEffort({
       date: "2026-07-08",
