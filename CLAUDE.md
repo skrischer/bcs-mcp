@@ -36,7 +36,7 @@ pnpm start:stdio  # Start in stdio mode (for Claude Desktop)
 src/index.ts   — Entry point (--stdio for stdio transport, default: HTTP)
 src/server.ts  — MCP session management, request routing
 src/logger.ts  — Console + file logging (bcs-mcp.log, truncated per start)
-src/tools.ts   — MCP tool definitions (8 tools)
+src/tools.ts   — MCP tool definitions (9 tools)
 src/api.ts     — BCS form-based API (HTML GET/POST, form state parsing)
 src/auth.ts    — BCS authentication (login, CSRF, TOTP 2FA, session persistence)
 ```
@@ -113,6 +113,24 @@ BCS uses **form-based server-side rendering**, not a REST API.
 6. POST with `PageForm,formChangedIndicator=true` + `daytimerecording,Apply=Speichern`
 7. Filter `$new$` attendance rows from POST to avoid side effects
 8. Verify by re-reading the page
+
+### Editing flow (existing booking)
+
+`editEffort()` changes an already-saved effort row's time and/or description
+in place, instead of creating a new row like Path B does:
+
+1. GET day page + AJAX expand, same resolution as delete (`resolveEffortLineOid`
+   shared helper — accepts either the `_JTask` or `_JEffort` OID)
+2. Requires `recordType=effort` on the resolved row (a `neweffort` row has
+   nothing to edit — throws pointing at `bcs_book_effort` instead)
+3. `hours`/`minutes`/`description` are each optional; an omitted field keeps
+   the row's current value (read from the AJAX-expanded task data). At least
+   one must be given.
+4. Set the new values directly via `body.set()` on the existing row (no
+   `$new$` row, no `_helper` append)
+5. Verify by comparing the project aggregate before/after against the
+   expected delta (`newTotal - oldEffortTotal`), since an edit can move the
+   total up, down, or not at all — unlike booking, which only ever increases it
 
 ### Key fields per effort entry
 

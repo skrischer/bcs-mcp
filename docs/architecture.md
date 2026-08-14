@@ -9,7 +9,7 @@
 | --------- | -------------- |
 | `src/index.ts` | Entry point; selects transport (`--stdio` vs. default HTTP), wires shutdown |
 | `src/server.ts` | MCP session management and request routing |
-| `src/tools.ts` | The 8 MCP tool definitions: input schemas + response formatting |
+| `src/tools.ts` | The 9 MCP tool definitions: input schemas + response formatting |
 | `src/api.ts` | BCS form-based API: HTML GET/POST, form-state parsing, day-type classification |
 | `src/auth.ts` | BCS authentication: login, CSRF, TOTP 2FA, `.bcs-session` persistence, config (`zod`) |
 | `src/logger.ts` | Console + file logging (`bcs-mcp.log`), imported by all modules |
@@ -26,7 +26,7 @@
 ## Key flows
 
 1. **Startup** — `index.ts` picks the transport → `server.ts` creates the MCP
-   server and registers the 8 tools.
+   server and registers the 9 tools.
 2. **Auth** — `auth.login()`: GET login page → POST credentials to the form's
    session-specific action URL → probe `GET /bcs` → if redirected to
    `totpVerification`, generate a TOTP (server-time corrected) and POST it →
@@ -37,7 +37,11 @@
 4. **Book** — GET page → AJAX-expand the project tree → dedupe fields →
    dual-path (set empty `neweffort` vs. append `$new$` `unsavedeffort`) → POST
    the whole form → verify by re-reading.
-5. **Overtime / Vacation** — AJAX lazy-load of the notification board
+5. **Edit** — GET page → AJAX-expand → resolve the existing `effort` row (same
+   OID resolution as delete) → set new hours/minutes/description directly on
+   that row (no `$new$` row) → POST → verify against the expected aggregate
+   delta.
+6. **Overtime / Vacation** — AJAX lazy-load of the notification board
    (overtime); GET + parse the vacation page (budget + absences).
 
 ## Where new code goes

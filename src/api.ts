@@ -697,6 +697,36 @@ export async function expandTreeNode(
   };
 }
 
+// bcs_get_tasks returns the _JTask OID for empty tasks but the _JEffort OID
+// once effort exists (expandTreeNode swaps them). Accept either: if the passed
+// OID is not a row in the expand, resolve it to the effort row whose
+// effortTargetOid matches it.
+function resolveEffortLineOid(
+  taskFields: [string, string][],
+  taskMap: Map<string, string>,
+  taskLineOid: string,
+  projectOid: string,
+): string {
+  const taskTypeKey = `${PSP_PREFIX},recordType,listeditoid_${taskLineOid}.recordType`;
+  if (taskMap.has(taskTypeKey)) return taskLineOid;
+
+  const effortEntry = parseExpandedTasks(taskFields).find(
+    (t) =>
+      taskMap.get(
+        `${PSP_PREFIX},effortTargetOid,listeditoid_${t.lineOid}.effortTargetOid`,
+      ) === taskLineOid,
+  );
+  if (!effortEntry) {
+    const available = parseExpandedTasks(taskFields)
+      .map((t) => `${t.lineOid} (target: ${t.recordOid})`)
+      .join(", ");
+    throw new Error(
+      `Task ${taskLineOid} not found in project ${projectOid}. Available: ${available}`,
+    );
+  }
+  return effortEntry.lineOid;
+}
+
 export async function deleteEffort(params: {
   date: string;
   projectOid: string;
@@ -709,29 +739,12 @@ export async function deleteEffort(params: {
   const { fields: taskFields } = await expandTreeNode(params.projectOid);
   const taskMap = toFormMap(taskFields);
 
-  // bcs_get_tasks returns the _JTask OID for empty tasks but the _JEffort OID
-  // once effort exists (expandTreeNode swaps them). Accept either: if the passed
-  // OID is not a row in the expand, resolve it to the effort row whose
-  // effortTargetOid matches it — the same fallback bookEffort uses.
-  let targetLineOid = params.taskLineOid;
-  const taskTypeKey = `${PSP_PREFIX},recordType,listeditoid_${targetLineOid}.recordType`;
-  if (!taskMap.has(taskTypeKey)) {
-    const effortEntry = parseExpandedTasks(taskFields).find(
-      (t) =>
-        taskMap.get(
-          `${PSP_PREFIX},effortTargetOid,listeditoid_${t.lineOid}.effortTargetOid`,
-        ) === params.taskLineOid,
-    );
-    if (!effortEntry) {
-      const available = parseExpandedTasks(taskFields)
-        .map((t) => `${t.lineOid} (target: ${t.recordOid})`)
-        .join(", ");
-      throw new Error(
-        `Task ${params.taskLineOid} not found in project ${params.projectOid}. Available: ${available}`,
-      );
-    }
-    targetLineOid = effortEntry.lineOid;
-  }
+  const targetLineOid = resolveEffortLineOid(
+    taskFields,
+    taskMap,
+    params.taskLineOid,
+    params.projectOid,
+  );
 
   const taskFieldKeys = new Set(taskFields.map(([name]) => name));
   const filteredFields = formFields.filter(
@@ -788,6 +801,179 @@ export async function deleteEffort(params: {
     success: remaining === 0,
     projects: parseProjectAggregates(responseHtml),
   };
+}
+
+export async function editEffort(params: {
+  date: string;
+  projectOid: string;
+  taskLineOid: string;
+  hours?: number;
+  minutes?: number;
+  description?: string;
+}): Promise<{ success: boolean; projects: ProjectAggregate[]; error?: string }> {
+  if (
+    params.hours === undefined &&
+    params.minutes === undefined &&
+    params.description === undefined
+  ) {
+    throw new Error(
+      "editEffort requires at least one of hours, minutes, or description to update",
+    );
+  }
+
+  const config = getConfig();
+  const html = await fetchDayPage(params.date);
+  const formFields = parseFormState(html);
+  const formMap = toFormMap(formFields);
+
+  const projectTypeKey = `${PSP_PREFIX},recordType,listeditoid_${params.projectOid}.recordType`;
+  if (formMap.get(projectTypeKey) !== "project") {
+    throw new Error(
+      `Project OID ${params.projectOid} not found. Available: ${getAvailableTaskOids(formMap).join(", ")}`,
+    );
+  }
+
+  const initialProject = parseProjectAggregates(html).find(
+    (p) => p.projectOid === params.projectOid,
+  );
+  const initialProjectTotal = initialProject
+    ? initialProject.hours * 60 + initialProject.minutes
+    : 0;
+
+  const { fields: taskFields } = await expandTreeNode(params.projectOid);
+  const taskMap = toFormMap(taskFields);
+
+  const targetLineOid = resolveEffortLineOid(
+    taskFields,
+    taskMap,
+    params.taskLineOid,
+    params.projectOid,
+  );
+
+  const recordType = taskMap.get(
+    `${PSP_PREFIX},recordType,listeditoid_${targetLineOid}.recordType`,
+  );
+  if (recordType !== "effort") {
+    throw new Error(
+      `Task ${params.taskLineOid} has no existing booked effort to edit (recordType=${recordType}). Use bcs_book_effort to create a new booking.`,
+    );
+  }
+
+  const currentHours =
+    parseInt(
+      taskMap.get(
+        `${PSP_PREFIX},effortExpense,listeditoid_${targetLineOid}.effortExpense_hour`,
+      ) ?? "0",
+      10,
+    ) || 0;
+  const currentMinutes =
+    parseInt(
+      taskMap.get(
+        `${PSP_PREFIX},effortExpense,listeditoid_${targetLineOid}.effortExpense_minute`,
+      ) ?? "0",
+      10,
+    ) || 0;
+  const currentDescription =
+    taskMap.get(
+      `${PSP_PREFIX},description,listeditoid_${targetLineOid}.description`,
+    ) ?? "";
+
+  const newHours = params.hours ?? currentHours;
+  const newMinutes = params.minutes ?? currentMinutes;
+  const newDescription = params.description ?? currentDescription;
+
+  // A row created via the BCS UI can carry an explicit start/end time range
+  // alongside its duration (bookEffort's own rows never set one). Changing
+  // the duration without also reconciling that range would leave BCS with an
+  // inconsistent entry, so reject rather than silently corrupt it.
+  if (newHours !== currentHours || newMinutes !== currentMinutes) {
+    const hasTimeRange = [
+      `${PSP_PREFIX},effortStart,listeditoid_${targetLineOid}.effortStart_hour`,
+      `${PSP_PREFIX},effortStart,listeditoid_${targetLineOid}.effortStart_minute`,
+      `${PSP_PREFIX},effortEnd,listeditoid_${targetLineOid}.effortEnd_hour`,
+      `${PSP_PREFIX},effortEnd,listeditoid_${targetLineOid}.effortEnd_minute`,
+    ].some((key) => (taskMap.get(key) ?? "").trim() !== "");
+    if (hasTimeRange) {
+      throw new Error(
+        `Task ${params.taskLineOid} has an explicit start/end time range that bcs_edit_effort does not maintain — changing the duration would leave the range inconsistent with it. Use bcs_delete_effort followed by bcs_book_effort instead.`,
+      );
+    }
+  }
+
+  const taskFieldKeys = new Set(taskFields.map(([name]) => name));
+  const filteredFields = formFields.filter(
+    ([name]) =>
+      !name.includes("daytimerecordingAttendance,$new$") &&
+      !taskFieldKeys.has(name),
+  );
+  const body = new URLSearchParams([...filteredFields, ...taskFields]);
+
+  body.set(
+    `${PSP_PREFIX},effortExpense,listeditoid_${targetLineOid}.effortExpense_hour`,
+    String(newHours),
+  );
+  body.set(
+    `${PSP_PREFIX},effortExpense,listeditoid_${targetLineOid}.effortExpense_minute`,
+    String(newMinutes),
+  );
+  body.set(
+    `${PSP_PREFIX},description,listeditoid_${targetLineOid}.description`,
+    newDescription,
+  );
+
+  body.set("daytimerecording,Apply", "Speichern");
+  body.set("PageForm,formChangedIndicator", "true");
+
+  const url = `${config.BCS_URL}${PAGE_PATH}`;
+  const response = await authenticatedFetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Origin: config.BCS_URL,
+      Referer: `${config.BCS_URL}${PAGE_PATH}?oid=${config.BCS_USER_OID}`,
+    },
+    body: body.toString(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to edit effort: ${response.status}`);
+  }
+
+  const responseHtml = await response.text();
+  const responseMap = toFormMap(parseFormState(responseHtml));
+  const afterHour = `${PSP_PREFIX},effortExpense,listeditoid_${params.projectOid}.effortExpense_hour`;
+  const afterMin = `${PSP_PREFIX},effortExpense,listeditoid_${params.projectOid}.effortExpense_minute`;
+  const projectTotal =
+    (parseInt(responseMap.get(afterHour) ?? "0", 10) || 0) * 60 +
+    (parseInt(responseMap.get(afterMin) ?? "0", 10) || 0);
+
+  const expectedTotal =
+    initialProjectTotal -
+    (currentHours * 60 + currentMinutes) +
+    (newHours * 60 + newMinutes);
+
+  const bcsErrors = parseBcsErrors(responseHtml);
+  const success = projectTotal === expectedTotal && bcsErrors.length === 0;
+
+  log("api:edit", "save POST response", {
+    status: response.status,
+    finalUrl: response.url,
+    redirected: response.redirected,
+    currentTotal: currentHours * 60 + currentMinutes,
+    expectedTotal,
+    projectTotal,
+    bcsErrors,
+  });
+
+  const projects = parseProjectAggregates(responseHtml);
+  let error: string | undefined;
+  if (!success) {
+    error =
+      bcsErrors.length > 0
+        ? bcsErrors.join(" ")
+        : `BCS accepted the POST (status ${response.status}) but the project aggregate does not match the expected total (booked ${Math.floor(projectTotal / 60)}h${projectTotal % 60}m, expected ${Math.floor(expectedTotal / 60)}h${expectedTotal % 60}m).`;
+  }
+  return { success, projects, error };
 }
 
 export async function bookEffort(params: {

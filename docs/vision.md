@@ -10,7 +10,7 @@ time from the work it is meant to track.
 ## Why now
 
 The team already works inside MCP clients (Claude Desktop / Code). An MCP bridge
-turns "book my week" into a sentence. The 8 core tools already work against the
+turns "book my week" into a sentence. The 9 core tools already work against the
 live instance; the project now needs a durable, iterative development footing
 (loopkit) so it can harden and grow without regressing.
 
@@ -38,8 +38,8 @@ MCP) that this differentiation rests on.
 
 ## Success criteria
 
-- All 8 MCP tools succeed against a live BCS instance (week/day summary, tasks,
-  book/delete effort, attendance, overtime, vacation).
+- All 9 MCP tools succeed against a live BCS instance (week/day summary, tasks,
+  book/edit/delete effort, attendance, overtime, vacation).
 - Login succeeds both with and without 2FA (TOTP), and across BCS instances that
   differ in login-form structure.
 - A full Mon–Fri work week can be booked end-to-end via natural language with no
@@ -50,7 +50,7 @@ MCP) that this differentiation rests on.
 
 ### In
 
-- The 8 booking/reading tools over the BCS form UI.
+- The 9 booking/reading tools over the BCS form UI.
 - Form-based authentication incl. TOTP 2FA and 30-min session caching.
 - HTTP and stdio transports.
 
